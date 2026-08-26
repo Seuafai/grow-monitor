@@ -615,7 +615,6 @@ class GrowGUI:
         sf.pack(fill="x", **pad)
         ttk.Button(sf, text="Play", command=self._tl_play).pack(side="left")
         ttk.Button(sf, text="Select All", command=self._tl_select_all).pack(side="left", padx=(12, 0))
-        ttk.Button(sf, text="Load from History", command=self._tl_load_from_history).pack(side="left", padx=(12, 0))
         ttk.Label(sf, text="Speed (ms):").pack(side="left", padx=(20, 0))
         self.tl_speed = tk.Entry(sf, font=("Consolas", 9), width=6, bg=BG_INPUT, fg=FG, insertbackground=FG)
         self.tl_speed.insert(0, "500")
@@ -2082,10 +2081,13 @@ class GrowGUI:
 
     def _tl_gen_thumbs(self, paths):
         from PIL import Image as PILImage
+        cw = max(self.tl_canvas.winfo_width() - 20, 400)
+        tw = max(cw // 2 - 10, 300)
+        th = int(tw * 0.67)
         for p in paths:
             try:
                 img = PILImage.open(p)
-                img.thumbnail((400, 300), PILImage.LANCZOS)
+                img.thumbnail((tw, th), PILImage.LANCZOS)
                 self._tl_thumb_cache[p] = img.copy()
             except Exception:
                 self._tl_thumb_cache[p] = None
@@ -2319,80 +2321,6 @@ class GrowGUI:
             for p in paths:
                 if p not in self._tl_excluded:
                     self._tl_selected.add(p)
-
-    def _tl_load_from_history(self):
-        history = load_history(DEFAULT_HISTORY)
-        entries = history.get("analyses", [])
-        entries_with_photos = [
-            (i, e) for i, e in enumerate(entries)
-            if e.get("photo_full_paths") or e.get("photo_paths")
-        ]
-        if not entries_with_photos:
-            messagebox.showinfo("Info", "No entries with photos found in history.")
-            return
-
-        win = tk.Toplevel(self.root)
-        win.title("Select Photos from History")
-        win.geometry("700x500")
-        win.configure(bg=BG)
-
-        ttk.Label(win, text="Select entries to load photos from:", style="Header.TLabel").pack(anchor="w", padx=10, pady=(10, 0))
-
-        list_frame = tk.Frame(win, bg=BG)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=6)
-
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side="right", fill="y")
-
-        listbox = tk.Listbox(
-            list_frame, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
-            selectforeground="white", font=("Consolas", 9), relief="flat",
-            activestyle="none", selectmode="extended", yscrollcommand=scrollbar.set,
-        )
-        listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=listbox.yview)
-
-        entry_map = []
-        for i, e in entries_with_photos:
-            ts = e.get("timestamp", "")
-            try:
-                dt = datetime.fromisoformat(ts)
-                date_str = dt.strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                date_str = ts[:16]
-            plant = e.get("plant", "")
-            n_photos = len(e.get("photo_full_paths") or e.get("photo_paths") or [])
-            listbox.insert("end", f"{date_str}  {plant}  ({n_photos} photos)")
-            entry_map.append(i)
-
-        def load_selected():
-            sel_indices = listbox.curselection()
-            if not sel_indices:
-                return
-            all_photos = []
-            for idx in sel_indices:
-                real_idx = entry_map[idx]
-                entry = entries[real_idx]
-                full_paths = entry.get("photo_full_paths", [])
-                basenames = entry.get("photo_paths", [])
-                for p in full_paths:
-                    if p and os.path.isfile(p):
-                        all_photos.append(p)
-                if not all_photos:
-                    for b in basenames:
-                        if b and os.path.isfile(b):
-                            all_photos.append(b)
-            if all_photos:
-                self._tl_dates["From History"] = all_photos
-                self.tl_folder_var.set("(history)")
-                self._refresh_timelapse_dates()
-                self._tl_show_photos(all_photos)
-            win.destroy()
-
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(fill="x", padx=10, pady=8)
-        ttk.Button(btn_frame, text="Load Selected", style="Accent.TButton", command=load_selected).pack(side="right")
-        ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side="right", padx=(0, 6))
 
     # ----------------------------------------------------------- Run
     def run(self):
