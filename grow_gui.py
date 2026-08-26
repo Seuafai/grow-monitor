@@ -591,8 +591,12 @@ class GrowGUI:
         if self._active_grow:
             self._on_sidebar_grow_select(None)
 
-    def _show_timelapse_view(self):
+    def _show_timelapse_view(self, auto_load=True):
         if self._current_view == "timelapse":
+            if auto_load:
+                sel = self.sidebar_tl_list.curselection()
+                if sel:
+                    self._on_sidebar_tl_select(None)
             return
         self._clear_content()
         self._current_view = "timelapse"
@@ -657,6 +661,12 @@ class GrowGUI:
 
         self._tl_refresh_grows()
         self._refresh_timelapse_dates()
+
+        if auto_load:
+            count = self.sidebar_tl_list.size()
+            if count > 0:
+                self.sidebar_tl_list.select_set(0)
+                self._on_sidebar_tl_select(None)
 
     def _show_entry_form(self, grow_num=None, plant_name=None):
         self._clear_content()
