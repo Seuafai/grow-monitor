@@ -662,11 +662,13 @@ class GrowGUI:
         self._tl_refresh_grows()
         self._refresh_timelapse_dates()
 
-        if auto_load:
-            count = self.sidebar_tl_list.size()
-            if count > 0:
-                self.sidebar_tl_list.select_set(0)
-                self._on_sidebar_tl_select(None)
+        if auto_load and self._sidebar_tl_items:
+            first_name = self._sidebar_tl_items[0]
+            safe_name = first_name.replace("#", "").replace(" ", "_").strip()
+            local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
+            os.makedirs(local_dir, exist_ok=True)
+            self.tl_folder_var.set(local_dir)
+            self._tl_load_folder()
 
     def _show_entry_form(self, grow_num=None, plant_name=None):
         self._clear_content()
