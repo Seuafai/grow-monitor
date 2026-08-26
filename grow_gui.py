@@ -2096,7 +2096,7 @@ class GrowGUI:
         for p in paths:
             try:
                 img = PILImage.open(p)
-                img.thumbnail((800, 600), PILImage.LANCZOS)
+                img.thumbnail((600, 400), PILImage.LANCZOS)
                 self._tl_thumb_cache[p] = img.copy()
             except Exception:
                 self._tl_thumb_cache[p] = None
