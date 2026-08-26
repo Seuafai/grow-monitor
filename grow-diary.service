@@ -1,0 +1,16 @@
+[Unit]
+Description=Grow Diary camera and sensor daemon
+After=bluetooth.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/pi_grow.py
+Restart=always
+RestartSec=30
+Environment=FIREBASE_SERVICE_ACCOUNT=/home/pi/firebase-key.json
+WorkingDirectory=/home/pi
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

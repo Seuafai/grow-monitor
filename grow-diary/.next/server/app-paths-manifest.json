@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/logout/route": "app/api/logout/route.js",
+  "/api/analyze/route": "app/api/analyze/route.js",
+  "/api/chat/route": "app/api/chat/route.js",
+  "/api/photos/route": "app/api/photos/route.js",
+  "/api/readings/route": "app/api/readings/route.js",
+  "/api/entries/route": "app/api/entries/route.js",
+  "/api/auth/route": "app/api/auth/route.js",
+  "/api/settings/route": "app/api/settings/route.js",
+  "/page": "app/page.js"
+}

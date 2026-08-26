@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review positions</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f3f4f6; color: #222; }
+  header { background: #1f2937; color: #fff; padding: .8rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+  header a, header button { color: #fff; text-decoration: none; }
+  main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+  .pos { background: #fff; border: 1px solid #d1d5db; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+  .pos.ok { border-left: 5px solid #22c55e; }
+  .pos.bad { border-left: 5px solid #ef4444; }
+  .pos h3 { margin: 0 0 .4rem; font-size: 1rem; }
+  .warn { color: #b91c1c; font-size: .85rem; margin: .2rem 0; }
+  .board-wrap { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
+  .board-box { position: relative; }
+  .board-box img { display: block; width: 448px; height: 448px; border: 1px solid #9ca3af; border-radius: 4px; }
+  .grid { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); }
+  .sq { border: 1px solid rgba(0,0,0,.15); font-size: 22px; font-weight: 700; display: flex; align-items: center; justify-content: center; background: transparent; cursor: pointer; padding: 0; }
+  .sq:hover { background: rgba(59,130,246,.35); }
+  .sq.w { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 2px #000; }
+  .sq.b { color: #111; text-shadow: 0 0 1px #fff; }
+  .panel { flex: 1; min-width: 280px; }
+  .fen-box { font-family: monospace; font-size: .9rem; padding: .4rem; width: 100%; box-sizing: border-box; }
+  .btnrow { margin-top: .6rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  .btnrow button { padding: .45rem .9rem; border-radius: 6px; border: 1px solid #888; background: #fff; cursor: pointer; }
+  .btnrow button.primary { background: #22c55e; border-color: #22c55e; color: #fff; }
+  .btnrow button.side.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+  .meta { color: #6b7280; font-size: .85rem; }
+  .toolbar { position: sticky; top: 0; background: #1f2937; z-index: 5; padding: .4rem 1.5rem; display: flex; gap: 1rem; align-items: center; }
+  .toolbar button { padding: .4rem .9rem; border-radius: 6px; border: 0; cursor: pointer; }
+  .legend { font-size: .8rem; color: #6b7280; margin-top: .3rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Review positions — <span id="src"></span></h1>
+  <a href="/">+ more files</a>
+</header>
+<div class="toolbar">
+  <span style="color:#fff;font-size:.9rem" id="tpl"></span>
+  <button id="download" style="margin-left:auto; background:#3b82f6; color:#fff; font-weight:600;">Download PGN</button>
+</div>
+<main id="main"></main>
+
+<script>
+const SESSION = location.pathname.split('/').pop();
+
+let positions = [];
+const SYM = { 'K':'♔','Q':'♕','R':'♖','B':'♗','N':'♘','P':'♙','k':'♚','q':'♛','r':'♜','b':'♝','n':'♞','p':'♟' };
+const ORDER = ['p','n','b','r','q','k'];
+
+function rankFile(i){ // grid index -> (rank 8..1, file a..h)
+  const r = Math.floor(i/8), c = i%8;
+  return { rank: 8-r, file: String.fromCharCode(97+c) };
+}
+
+function render(){
+  const main = document.getElementById('main');
+  main.innerHTML = '';
+  positions.forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'pos ' + (p.warnings.length ? 'bad' : 'ok');
+    const meta = `${p.source}${p.page ? ', page ' + p.page : ''}, diagram ${p.diagram}${p.flipped ? ' (flipped)' : ''}${p.eval ? ' — eval ' + p.eval : ''}`;
+    div.innerHTML = `
+      <h3>Position ${p.diagram}</h3>
+      <div class="meta">${meta}</div>
+      <div class="board-wrap">
+        <div class="board-box">
+          <img src="/montage/${p.id}.png" alt="board">
+          <div class="grid" data-id="${p.id}"></div>
+        </div>
+        <div class="panel">
+          <div class="warn" style="display:${p.warnings.length?'':'none'}">⚠ ${p.warnings.join('; ')}</div>
+          <label>FEN</label>
+          <textarea class="fen-box" data-id="${p.id}">${p.fen}</textarea>
+          <div class="btnrow">
+            <button class="side ${p.side === 'w' ? 'active' : ''}" data-id="${p.id}">○ White to move</button>
+            <button class="side ${p.side === 'b' ? 'active' : ''}" data-id="${p.id}">● Black to move</button>
+          </div>
+          <div class="btnrow">
+            <button class="learn primary" data-id="${p.id}">✓ Confirm &amp; learn</button>
+            <button class="flip" data-id="${p.id}">↻ Flip board</button>
+          </div>
+          <div class="legend">Click a square to cycle the piece (♙ pawn → knight → bishop → rook → queen → king → empty). Shift-click toggles color. Use the ○/● buttons to set which side is to move.</div>
+        </div>
+      </div>`;
+    main.appendChild(div);
+    buildGrid(p, div.querySelector('.grid'));
+  });
+}
+
+function buildGrid(p, gridEl){
+  for (let i = 0; i < 64; i++){
+    const ch = p.grid_str[i];
+    const b = document.createElement('button');
+    b.className = 'sq' + (ch === '.' ? '' : (ch === ch.toUpperCase() ? ' w' : ' b'));
+    b.textContent = ch === '.' ? '' : SYM[ch];
+    b.dataset.i = i;
+    b.addEventListener('click', ev => cycle(ev, p));
+    gridEl.appendChild(b);
+  }
+}
+
+function cycle(ev, p){
+  ev.preventDefault();
+  const i = +ev.currentTarget.dataset.i;
+  const cur = p.grid_str[i];
+  let next;
+  if (cur === '.'){
+    next = (ev.shiftKey ? 'k' : 'P');
+  } else {
+    const type = cur.toLowerCase();
+    const white = cur === cur.toUpperCase();
+    const color = (ev.shiftKey ? !white : white);
+    const ti = ORDER.indexOf(type);
+    if (ev.shiftKey){
+      next = color ? type.toUpperCase() : type; // toggle color only
+    } else if (ti === 5){
+      next = '.'; // king -> empty
+    } else {
+      const nt = ORDER[ti + 1];
+      next = color ? nt.toUpperCase() : nt;
+    }
+  }
+  p.grid_str = p.grid_str.slice(0, i) + next + p.grid_str.slice(i + 1);
+  updatePos(p);
+}
+
+async function updatePos(p){
+  const r = await fetch('/pos/' + p.id + '/update', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ session_id: SESSION, grid: p.grid_str })
+  });
+  const d = await r.json();
+  p.fen = d.fen; p.warnings = d.warnings;
+  render();
+}
+
+document.addEventListener('click', async e => {
+  const t = e.target;
+  if (t.classList.contains('side')){
+    const p = positions.find(x => x.id === t.dataset.id);
+    const side = t.textContent.includes('Black') ? 'b' : 'w';
+    const r = await fetch('/pos/' + p.id + '/side', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SESSION, side })
+    });
+    const d = await r.json();
+    p.fen = d.fen; p.warnings = d.warnings; p.side = d.side;
+    render();
+  }
+  if (t.classList.contains('learn')){
+    const p = positions.find(x => x.id === t.dataset.id);
+    t.textContent = 'Learning…'; t.disabled = true;
+    const r = await fetch('/pos/' + p.id + '/learn', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SESSION, grid: p.grid_str })
+    });
+    const d = await r.json();
+    await loadData();
+    const msg = d.learned > 0
+      ? `Learned ${d.learned} new piece glyph(s) from this position (${d.already} already known). These now help read every future page in this book.`
+      : `Nothing new to learn here — all ${d.already} piece(s) in this position were already known. This is expected when the page was already read correctly.`;
+    alert(msg);
+  }
+  if (t.classList.contains('flip')){
+    const p = positions.find(x => x.id === t.dataset.id);
+    const r = await fetch('/pos/' + p.id + '/flip', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SESSION })
+    });
+    const d = await r.json();
+    p.grid_str = d.grid; p.fen = d.fen; p.warnings = d.warnings; p.flipped = d.flipped;
+    render();
+  }
+});
+
+document.addEventListener('change', async e => {
+  if (e.target.classList.contains('fen-box')){
+    const p = positions.find(x => x.id === e.target.dataset.id);
+    p.fen = e.target.value;
+    const r = await fetch('/pos/' + p.id + '/update', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SESSION, grid: p.grid_str })
+    });
+    const d = await r.json();
+    p.fen = d.fen; p.warnings = d.warnings;
+    render();
+  }
+});
+
+document.getElementById('download').addEventListener('click', () => {
+  location.href = '/export/' + SESSION;
+});
+
+async function loadData(){
+  const r = await fetch('/data/' + SESSION);
+  const d = await r.json();
+  positions = d.positions;
+  document.getElementById('src').textContent = d.source;
+  const tr = await fetch('/api/templates').then(x => x.json());
+  document.getElementById('tpl').textContent = 'Learned templates: ' +
+    Object.entries(tr).map(([k,v]) => `${k}:${v}`).join('  ');
+  render();
+}
+
+loadData();
+</script>
+</body>
+</html>

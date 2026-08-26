@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "functions": {
+    "/api/auth": {},
+    "/api/analyze": {
+      "maxDuration": 120
+    },
+    "/api/chat": {
+      "maxDuration": 120
+    },
+    "/api/entries": {},
+    "/api/photos": {},
+    "/api/readings": {},
+    "/api/settings": {}
+  }
+}
