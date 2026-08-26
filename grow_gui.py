@@ -2048,6 +2048,9 @@ class GrowGUI:
     def _refresh_timelapse_dates(self):
         if hasattr(self, "tl_date_list"):
             self.tl_date_list.delete(0, "end")
+            total = sum(len(v) for v in self._tl_dates.values())
+            if self._tl_dates:
+                self.tl_date_list.insert("end", f"All  ({total})")
             for date_str in sorted(self._tl_dates.keys(), reverse=True):
                 count = len(self._tl_dates[date_str])
                 self.tl_date_list.insert("end", f"{date_str}  ({count})")
@@ -2059,6 +2062,10 @@ class GrowGUI:
         all_paths = []
         for s in sel:
             text = self.tl_date_list.get(s)
+            if text.startswith("All"):
+                for paths in self._tl_dates.values():
+                    all_paths.extend(paths)
+                break
             date_str = text.split("  ")[0]
             all_paths.extend(self._tl_dates.get(date_str, []))
         self._tl_show_photos(all_paths)
@@ -2080,7 +2087,7 @@ class GrowGUI:
         batch = self._tl_pending_paths[self._tl_loaded_count:end]
         missing = [p for p in batch if p not in self._tl_thumb_cache]
         if missing:
-            threading.Thread(target=self._tl_gen_thumbs, args=(missing,), daemon=True).start()
+            self._tl_gen_thumbs(missing)
         cols = 2
         for i, path in enumerate(batch, start=self._tl_loaded_count):
             if path in self._tl_thumb_cache and self._tl_thumb_cache[path] is not None:
@@ -2105,25 +2112,10 @@ class GrowGUI:
                 self._tl_thumb_cache[p] = img.copy()
             except Exception:
                 self._tl_thumb_cache[p] = None
-        self.root.after(0, self._tl_refresh_visible)
-
-    def _tl_refresh_visible(self):
-        for widget in self._tl_photo_items:
-            for child in widget.winfo_children():
-                path = getattr(child, "_tl_path", None)
-                if not path or path not in self._tl_thumb_cache:
-                    continue
-                cached = self._tl_thumb_cache[path]
-                if cached is None:
-                    child.config(text="Error", image="")
-                    continue
-                thumb = ImageTk.PhotoImage(cached)
-                child._tl_thumb_ref = thumb
-                child.config(image=thumb, text="")
 
     def _tl_add_placeholder(self, path):
-        cols = 3
-        i = self._tl_photo_items.__len__()
+        cols = 2
+        i = len(self._tl_photo_items)
         self._tl_add_widget(path, i, cols, placeholder=True)
 
     def _tl_add_widget(self, path, i, cols, placeholder=False):
@@ -2189,21 +2181,30 @@ class GrowGUI:
         if view_bot > 0.85:
             self._tl_load_batch()
 
+    def _tl_get_selected_paths(self):
+        sel = self.tl_date_list.curselection()
+        if not sel:
+            return []
+        all_paths = []
+        for s in sel:
+            text = self.tl_date_list.get(s)
+            if text.startswith("All"):
+                for paths in self._tl_dates.values():
+                    all_paths.extend(paths)
+                break
+            date_str = text.split("  ")[0]
+            all_paths.extend(self._tl_dates.get(date_str, []))
+        return all_paths
+
     def _tl_rotate_photo(self, path):
         try:
             self._tl_thumb_cache.pop(path, None)
             img = Image.open(path)
             img = img.rotate(-90, expand=True)
             img.save(path)
-            sel = self.tl_date_list.curselection()
-            if not sel:
-                return
-            all_paths = []
-            for s in sel:
-                text = self.tl_date_list.get(s)
-                date_str = text.split("  ")[0]
-                all_paths.extend(self._tl_dates.get(date_str, []))
-            self._tl_show_photos(all_paths)
+            all_paths = self._tl_get_selected_paths()
+            if all_paths:
+                self._tl_show_photos(all_paths)
         except Exception as e:
             messagebox.showerror("Rotate Failed", str(e))
 
@@ -2213,27 +2214,15 @@ class GrowGUI:
         try:
             os.remove(path)
             self._tl_thumb_cache.pop(path, None)
-            sel = self.tl_date_list.curselection()
-            if sel:
-                all_paths = []
-                for s in sel:
-                    text = self.tl_date_list.get(s)
-                    date_str = text.split("  ")[0]
-                    all_paths.extend(self._tl_dates.get(date_str, []))
+            all_paths = self._tl_get_selected_paths()
+            if all_paths:
                 self._tl_show_photos(all_paths)
         except Exception as e:
             messagebox.showerror("Delete Failed", str(e))
 
     def _tl_play(self):
-        sel = self.tl_date_list.curselection()
-        if sel:
-            all_paths = []
-            for s in sel:
-                text = self.tl_date_list.get(s)
-                date_str = text.split("  ")[0]
-                all_paths.extend(self._tl_dates.get(date_str, []))
-        else:
-            all_paths = []
+        all_paths = self._tl_get_selected_paths()
+        if not all_paths:
             for paths in self._tl_dates.values():
                 all_paths.extend(paths)
         self.tl_slideshow_paths = [p for p in all_paths if p not in self._tl_excluded]
