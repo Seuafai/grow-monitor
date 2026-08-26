@@ -2081,7 +2081,9 @@ class GrowGUI:
 
     def _tl_gen_thumbs(self, paths):
         from PIL import Image as PILImage
-        cw = max(self.tl_canvas.winfo_width() - 20, 400)
+        cw = self.tl_canvas.winfo_width()
+        if cw < 100:
+            cw = 800
         tw = max(cw // 2 - 10, 300)
         th = int(tw * 0.67)
         for p in paths:
