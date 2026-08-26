@@ -353,6 +353,7 @@ class GrowGUI:
         self._active_grow = None
 
         self._build_ui()
+        self._refresh_all()
 
     # ================================================================== UI
     def _build_ui(self):
