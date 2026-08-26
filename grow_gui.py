@@ -4,7 +4,7 @@ Wraps analyze.py in a desktop interface for selecting photos, CSVs,
 adding notes, and chatting with Gemini about your DWC grow.
 
 Requirements:
-    pip install google-genai Pillow matplotlib
+    pip install google-genai Pillow
 
 Environment:
     GEMINI_API_KEY  get yours free at https://aistudio.google.com
@@ -24,7 +24,6 @@ import time
 import tkinter as tk
 import urllib.request
 from datetime import datetime, timedelta
-from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from google import genai
@@ -1404,17 +1403,6 @@ class GrowGUI:
                     pass
         self._show_entry_form(grow_num=str(max_grow + 1), plant_name="")
 
-    def _add_entry_from_sidebar(self):
-        sel = self.sidebar_grow_list.curselection()
-        if not sel:
-            messagebox.showwarning("Select Grow", "Select a grow from the sidebar first.")
-            return
-        grow_info = self._sidebar_grow_items.get(sel[0])
-        if not grow_info:
-            return
-        gid = str(grow_info["grow_int"]) if grow_info["grow_int"] != 9999 else "1"
-        self._show_entry_form(grow_num=gid, plant_name=grow_info["plant_name"])
-
     # ----------------------------------------------------------- Live View
     def _open_live_view(self, addr=None):
         if addr is None:
@@ -2021,6 +2009,7 @@ class GrowGUI:
         folder = self.tl_folder_var.get().strip()
         if not folder or not os.path.isdir(folder):
             return
+        self._tl_thumb_cache.clear()
         self._tl_dates.clear()
         for fname in sorted(os.listdir(folder)):
             if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -2081,7 +2070,7 @@ class GrowGUI:
         missing = [p for p in batch if p not in self._tl_thumb_cache]
         if missing:
             threading.Thread(target=self._tl_gen_thumbs, args=(missing,), daemon=True).start()
-        cols = 3
+        cols = 2
         for i, path in enumerate(batch, start=self._tl_loaded_count):
             if path in self._tl_thumb_cache and self._tl_thumb_cache[path] is not None:
                 self._tl_add_widget(path, i, cols)
@@ -2096,7 +2085,7 @@ class GrowGUI:
         for p in paths:
             try:
                 img = PILImage.open(p)
-                img.thumbnail((600, 400), PILImage.LANCZOS)
+                img.thumbnail((400, 300), PILImage.LANCZOS)
                 self._tl_thumb_cache[p] = img.copy()
             except Exception:
                 self._tl_thumb_cache[p] = None
@@ -2174,15 +2163,6 @@ class GrowGUI:
             self._tl_selected.add(path)
             widget.master.config(bg="#1f3a5f")
 
-    def _tl_toggle_exclude(self, path, widget):
-        if path in self._tl_excluded:
-            self._tl_excluded.discard(path)
-            widget.master.config(bg=BG_CARD)
-        else:
-            self._tl_excluded.add(path)
-            self._tl_selected.discard(path)
-            widget.master.config(bg="#3d1f1f")
-
     def _tl_on_scroll(self, event):
         if self._tl_loaded_count >= len(self._tl_pending_paths):
             return
@@ -2210,6 +2190,23 @@ class GrowGUI:
             self._tl_show_photos(all_paths)
         except Exception as e:
             messagebox.showerror("Rotate Failed", str(e))
+
+    def _tl_delete_photo(self, path):
+        if not os.path.isfile(path):
+            return
+        try:
+            os.remove(path)
+            self._tl_thumb_cache.pop(path, None)
+            sel = self.tl_date_list.curselection()
+            if sel:
+                all_paths = []
+                for s in sel:
+                    text = self.tl_date_list.get(s)
+                    date_str = text.split("  ")[0]
+                    all_paths.extend(self._tl_dates.get(date_str, []))
+                self._tl_show_photos(all_paths)
+        except Exception as e:
+            messagebox.showerror("Delete Failed", str(e))
 
     def _tl_play(self):
         sel = self.tl_date_list.curselection()
