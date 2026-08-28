@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ grow.name }} - GrowLab{% endblock %}
+{% block content %}
+<div class="topbar">
+  <a href="/" style="font-size:20px">&#8592;</a>
+  <h1>{{ grow.name }}</h1>
+</div>
+
+{% for gid, g in grow.grows.items() %}
+<div class="card">
+  <h2>Grow #{{ gid }} <span class="badge green">{{ g.entries|length }} entries</span></h2>
+</div>
+
+{% set stages = {} %}
+{% for idx in g.entries|reverse %}
+{% set entry = entries[idx] %}
+{% set stage = entry.get('growth_stage', '') %}
+<div class="card" onclick="location.href='/entry/{{ idx }}'" style="cursor:pointer">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <div>
+      <strong>{{ entry.get('observation_date', entry.get('timestamp', '')[:10]) }}</strong>
+      {% if stage %}<span class="badge orange" style="margin-left:6px">{{ stage }}</span>{% endif %}
+    </div>
+    <span style="color:var(--dim);font-size:12px">#{{ idx }}</span>
+  </div>
+
+  {% set analysis = entry.get('analysis', {}) %}
+  {% if analysis.get('health_score') is not none %}
+  <div style="margin:6px 0">
+    <span style="font-size:24px;font-weight:700;{% if analysis.health_score >= 70 %}color:var(--green){% elif analysis.health_score >= 40 %}color:var(--orange){% else %}color:var(--red){% endif %}">{{ analysis.health_score }}</span>
+    <span style="color:var(--dim);font-size:13px">/ 100</span>
+  </div>
+  {% endif %}
+
+  {% if entry.get('photo_full_paths') or entry.get('photo_paths') %}
+  <div style="display:flex;gap:4px;margin-top:6px;overflow-x:auto">
+    {% for p in (entry.get('photo_full_paths') or entry.get('photo_paths') or [])[:4] %}
+    <img src="/api/photo/{{ p }}" style="width:80px;height:60px;object-fit:cover;border-radius:4px;flex-shrink:0" loading="lazy">
+    {% endfor %}
+    {% if (entry.get('photo_full_paths') or entry.get('photo_paths') or [])|length > 4 %}
+    <div style="width:80px;height:60px;background:var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px;flex-shrink:0">+{{ (entry.get('photo_full_paths') or entry.get('photo_paths') or [])|length - 4 }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if entry.get('yield_dry_g') or entry.get('yield_cured_g') %}
+  <div style="margin-top:6px;color:var(--dim);font-size:12px">
+    Yield: {% if entry.get('yield_dry_g') %}{{ entry.yield_dry_g }}g dry{% endif %}
+    {% if entry.get('yield_cured_g') %} / {{ entry.yield_cured_g }}g cured{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endfor %}
+{% endblock %}

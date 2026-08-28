@@ -94,15 +94,18 @@ def seconds_until_next(interval_minutes):
 
 
 def run_once(cfg):
-    os.makedirs(os.path.expanduser(cfg["directory"]), exist_ok=True)
+    base_dir = os.path.expanduser(cfg["directory"])
     now = dt.datetime.now()
+    day_folder = now.strftime("%Y-%m-%d")
+    out_dir = os.path.join(base_dir, day_folder)
+    os.makedirs(out_dir, exist_ok=True)
     filename = now.strftime("tl-%Y%m%d-%H%M%S.jpg")
-    path = os.path.join(os.path.expanduser(cfg["directory"]), filename)
+    path = os.path.join(out_dir, filename)
     ok = capture_frame(cfg["width"], cfg["height"], path)
     if not ok:
         print(f"[{now.strftime('%H:%M:%S')}] Failed to capture frame")
         return False
-    print(f"[{now.strftime('%H:%M:%S')}] Saved {filename}")
+    print(f"[{now.strftime('%H:%M:%S')}] Saved {day_folder}/{filename}")
     return True
 
 

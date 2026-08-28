@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}{{ folder_name }} - GrowLab{% endblock %}
+{% block content %}
+<div class="topbar">
+  <a href="/timelapse" style="font-size:20px">&#8250;</a>
+  <h1>{{ folder_name|replace('_', ' ') }}</h1>
+  <div class="spacer"></div>
+  <select id="speedSelect" style="width:auto;padding:4px 8px;font-size:12px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px">
+    <option value="500">0.5x</option>
+    <option value="200" selected>1x</option>
+    <option value="100">2x</option>
+    <option value="50">5x</option>
+    <option value="25">10x</option>
+  </select>
+  <button class="btn sm secondary" id="playBtn" onclick="togglePlay()">Play</button>
+</div>
+
+<div class="list" id="dateList">
+  <a href="#" onclick="loadDate('all', this); return false" style="font-weight:600">
+    All Dates <span class="count">{{ total_photos }} photos</span>
+  </a>
+  {% for d in sorted_dates %}
+  <a href="#" onclick="loadDate('{{ d }}', this); return false">
+    {{ d }} <span class="count">{{ dates[d] }} photos</span>
+  </a>
+  {% endfor %}
+</div>
+
+<div id="viewer" style="display:none;text-align:center;background:#000;position:relative">
+  <img id="viewerImg" style="max-width:100%;max-height:70vh;object-fit:contain">
+  <div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:#333">
+    <div id="viewerBar" style="height:100%;background:var(--accent);width:0;transition:width .1s"></div>
+  </div>
+  <div style="padding:8px;color:var(--dim);font-size:12px" id="viewerLabel"></div>
+</div>
+
+<div id="photoContainer" style="padding:4px"></div>
+
+<script>
+let allPhotos = [];
+let currentIdx = 0;
+let playing = false;
+let playTimer = null;
+
+function loadDate(date, el) {
+  document.querySelectorAll('#dateList a').forEach(a => a.style.background = '');
+  el.style.background = 'var(--border)';
+  document.getElementById('photoContainer').innerHTML = '<div class="empty">Loading...</div>';
+  fetch(`/api/timelapse/dates/{{ folder_name }}/${date}`)
+    .then(r => r.json())
+    .then(data => {
+      allPhotos = data.photos || [];
+      let html = '';
+      let lastDate = '';
+      allPhotos.forEach(p => {
+        if (p.date !== lastDate) {
+          lastDate = p.date;
+          html += `<div class="date-header">${p.date} <span style="color:var(--dim)">(${data.counts[p.date] || 0})</span></div>`;
+        }
+        const mn = p.fname.length > 13 ? p.fname.substring(11,13) : '';
+        const sc = p.fname.length > 15 ? p.fname.substring(13,15) : '';
+        const t = (mn && sc) ? mn+':'+sc : '';
+        const rel = p.rel || p.fname;
+        html += `<div class="photo-grid"><div class="photo" onclick="openViewer(${allPhotos.indexOf(p)})">
+          <img src="/api/timelapse/thumb/{{ folder_name }}/${rel}" loading="lazy">
+          <div class="filename">${t}</div>
+        </div></div>`;
+      });
+      document.getElementById('photoContainer').innerHTML = html || '<div class="empty">No photos</div>';
+    });
+}
+
+function openViewer(idx) {
+  currentIdx = idx;
+  showSlide();
+  document.getElementById('viewer').style.display = 'block';
+  document.getElementById('viewer').scrollIntoView({behavior: 'instant'});
+}
+
+function showSlide() {
+  if (!allPhotos.length) return;
+  const p = allPhotos[currentIdx];
+  const rel = p.rel || p.fname;
+  document.getElementById('viewerImg').src = `/api/timelapse/photo/{{ folder_name }}/${rel}`;
+  document.getElementById('viewerLabel').textContent = `${currentIdx+1} / ${allPhotos.length} — ${p.fname}`;
+  document.getElementById('viewerBar').style.width = ((currentIdx+1)/allPhotos.length*100) + '%';
+}
+
+function togglePlay() {
+  if (playing) { stopPlay(); return; }
+  if (!allPhotos.length) { loadDate('all', document.querySelector('#dateList a')); return; }
+  if (currentIdx >= allPhotos.length) currentIdx = 0;
+  document.getElementById('viewer').style.display = 'block';
+  playing = true;
+  document.getElementById('playBtn').textContent = 'Stop';
+  document.getElementById('playBtn').className = 'btn sm danger';
+  const speed = parseInt(document.getElementById('speedSelect').value);
+  playTimer = setInterval(() => {
+    currentIdx = (currentIdx + 1) % allPhotos.length;
+    showSlide();
+  }, speed);
+}
+
+function stopPlay() {
+  playing = false;
+  clearInterval(playTimer);
+  document.getElementById('playBtn').textContent = 'Play';
+  document.getElementById('playBtn').className = 'btn sm secondary';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { stopPlay(); document.getElementById('viewer').style.display = 'none'; }
+  if (e.key === 'ArrowRight' && allPhotos.length) { currentIdx = Math.min(currentIdx+1, allPhotos.length-1); showSlide(); }
+  if (e.key === 'ArrowLeft' && allPhotos.length) { currentIdx = Math.max(currentIdx-1, 0); showSlide(); }
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+});
+</script>
+{% endblock %}

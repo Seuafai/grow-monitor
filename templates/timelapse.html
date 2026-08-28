@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Timelapse - GrowLab{% endblock %}
+{% block content %}
+<div class="topbar">
+  <h1>Timelapse</h1>
+  <div class="spacer"></div>
+  <button class="btn sm secondary" onclick="this.textContent='Syncing...';fetch('/api/sync',{method:'POST'}).then(()=>setTimeout(()=>this.textContent='Sync Pi',1000))">Sync Pi</button>
+</div>
+
+{% if tl_folders %}
+<div class="list">
+  {% for f in tl_folders %}
+  <a href="/timelapse/{{ f.name }}" style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border);color:var(--fg)">
+    <span style="font-size:24px">&#127909;</span>
+    <div style="flex:1">
+      <div style="font-weight:600">{{ f.name|replace('_', ' ') }}</div>
+      <div style="font-size:12px;color:var(--dim)">{{ f.count }} photos</div>
+    </div>
+    <span style="color:var(--dim)">&#8250;</span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  <p>No timelapse folders found.</p>
+  <p style="margin-top:8px">Start timelapse from the desktop app or Pi.</p>
+</div>
+{% endif %}
+{% endblock %}

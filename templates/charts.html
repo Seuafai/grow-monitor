@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Charts - GrowLab{% endblock %}
+{% block content %}
+<div class="topbar">
+  <h1>Sensor Charts</h1>
+</div>
+
+<div class="card">
+  <label>Select Grow</label>
+  <select id="growSelect" onchange="loadEntries()">
+    <option value="">-- choose --</option>
+    {% for name, grow in grows.items() %}
+    {% for gid, g in grow.grows.items() %}
+    <option value="{{ name }}|{{ gid }}">{{ name }} #{{ gid }}</option>
+    {% endfor %}
+    {% endfor %}
+  </select>
+</div>
+
+<div class="card">
+  <label>Select Entry</label>
+  <select id="entrySelect" onchange="loadChart()">
+    <option value="">-- choose grow first --</option>
+  </select>
+</div>
+
+<div id="chartsContainer"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4?v=2"></script>
+<script>
+let allEntries = [];
+let charts = {};
+const COLORS = {'Temperature': '#f85149', 'Relative Humidity': '#58a6ff', 'VPD': '#3fb950'};
+
+fetch('/api/entries_json').then(r=>r.json()).then(d=>{allEntries=d});
+
+function loadEntries() {
+  const sel = document.getElementById('entrySelect');
+  const val = document.getElementById('growSelect').value;
+  sel.innerHTML = '<option value="">--</option>';
+  document.getElementById('chartsContainer').innerHTML = '';
+  if (!val) return;
+  const [name, gid] = val.split('|');
+  allEntries.forEach((e, i) => {
+    const p = e.plant || '';
+    if (p.includes(name) && p.includes('#'+gid) && e.csv_path) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = e.observation_date || e.timestamp?.slice(0,10) || '';
+      sel.appendChild(opt);
+    }
+  });
+}
+
+function loadChart() {
+  const idx = document.getElementById('entrySelect').value;
+  if (!idx) return;
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+  fetch(`/api/sensor_data/${idx}`).then(r=>r.json()).then(data => {
+    let html = '<div class="card" style="padding:8px">';
+    let statsHtml = '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px">';
+    for (const [col, s] of Object.entries(data)) {
+      const id = 'chart_' + col.replace(/[^a-zA-Z]/g, '_');
+      const color = COLORS[col] || '#58a6ff';
+      html += `<div style="margin-bottom:6px"><div style="font-size:11px;color:${color};font-weight:600;margin-bottom:2px">${col} <span style="color:var(--dim);font-weight:normal">${s.avg} (min ${s.min} / max ${s.max})</span></div><canvas id="${id}" style="width:100%;height:60px"></canvas></div>`;
+      statsHtml += `<div class="metric" style="flex:1;min-width:70px"><div class="val" style="font-size:16px;color:${color}">${s.avg}</div><div class="lbl" style="font-size:10px">${col}<br>(${s.samples})</div></div>`;
+    }
+    html += '</div>';
+    statsHtml += '</div></div>';
+    document.getElementById('chartsContainer').innerHTML = html + statsHtml;
+
+    for (const [col, s] of Object.entries(data)) {
+      const id = 'chart_' + col.replace(/[^a-zA-Z]/g, '_');
+      const color = COLORS[col] || '#58a6ff';
+      charts[col] = new Chart(document.getElementById(id), {
+        type: 'line',
+        data: {
+          labels: s.labels,
+          datasets: [{
+            data: s.values,
+            borderColor: color,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: false,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: true } },
+          scales: {
+            x: { display: false },
+            y: { display: false }
+          }
+        }
+      });
+    }
+  });
+}
+</script>
+{% endblock %}

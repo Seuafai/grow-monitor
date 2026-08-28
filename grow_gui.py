@@ -354,6 +354,7 @@ class GrowGUI:
 
         self._build_ui()
         self._refresh_all()
+        self.root.after(2000, self._auto_sync_on_startup)
 
     # ================================================================== UI
     def _build_ui(self):
@@ -460,6 +461,10 @@ class GrowGUI:
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 9),
                   bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
 
+        tk.Button(self.sidebar, text="Phone App", command=self._launch_web_app,
+                  bg="#1a3a5f", fg=FG, font=("Segoe UI", 9),
+                  bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
+
         # Sidebar refresh button
         tk.Button(self.sidebar, text="Refresh", command=self._refresh_all,
                   bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 8),
@@ -470,6 +475,38 @@ class GrowGUI:
         self._refresh_sidebar_grows()
         self._refresh_sidebar_tl()
         self._tl_refresh_grows()
+
+    def _auto_sync_on_startup(self):
+        for i in range(self.sidebar_tl_list.size()):
+            name = self._sidebar_tl_items.get(i)
+            if not name:
+                continue
+            safe_name = name.replace("#", "").replace(" ", "_").strip()
+            local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
+            pi_dir = "~/plant-monitor/data/photos/timelapse"
+            os.makedirs(local_dir, exist_ok=True)
+
+            def sync_folder(ld=local_dir, pd=pi_dir):
+                try:
+                    result = subprocess.run(
+                        ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                         "hawkewing@raspberrypi.local", f"find {pd} -name '*.jpg' -type f 2>/dev/null"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    files = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+                    if not files:
+                        return
+                    subprocess.run(
+                        ["rsync", "-az", "--timeout=10", "--relative",
+                         f"hawkewing@raspberrypi.local:{pd}/", ld + "/"],
+                        timeout=120,
+                    )
+                    self.root.after(0, self._tl_load_folder)
+                except Exception:
+                    pass
+
+            threading.Thread(target=sync_folder, daemon=True).start()
+            break
 
     def _check_timelapse_status(self):
         def check():
@@ -768,10 +805,20 @@ class GrowGUI:
         pf = ttk.Frame(form)
         pf.pack(fill="x", **pad)
         def browse_photos():
-            paths = filedialog.askopenfilenames(filetypes=[("Images", "*.jpg *.jpeg *.png *.webp")])
-            if paths:
-                form.image_paths.extend(paths)
-                form.image_types.extend([form.photo_type_var.get()] * len(paths))
+            base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+            if os.path.isdir(base):
+                first = None
+                for name in sorted(os.listdir(base)):
+                    full = os.path.join(base, name)
+                    if os.path.isdir(full) and not name.startswith("."):
+                        first = full
+                        break
+                if first:
+                    base = first
+            sel_paths = self._pick_photos_gui(base)
+            if sel_paths:
+                form.image_paths.extend(sel_paths)
+                form.image_types.extend([form.photo_type_var.get()] * len(sel_paths))
                 refresh_thumbs()
         ttk.Button(pf, text="Add Photos...", command=browse_photos).pack(side="left")
         def clear_photos():
@@ -836,7 +883,8 @@ class GrowGUI:
         cf = ttk.Frame(form)
         cf.pack(fill="x", **pad)
         def browse_csv():
-            path = filedialog.askopenfilename(filetypes=[("CSV", "*.csv")])
+            path = filedialog.askopenfilename(initialdir=os.path.expanduser("~/Downloads"),
+                                              filetypes=[("CSV", "*.csv")])
             if path:
                 try:
                     stats, fieldnames, raw_rows = parse_csv(path)
@@ -1416,6 +1464,44 @@ class GrowGUI:
         self._show_entry_form(grow_num=str(max_grow + 1), plant_name="")
 
     # ----------------------------------------------------------- Live View
+    def _launch_web_app(self):
+        import socket
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_app.py")
+        if not os.path.isfile(script):
+            messagebox.showerror("Error", f"web_app.py not found at {script}")
+            return
+        subprocess.run(["fuser", "-k", "5000/tcp"], capture_output=True)
+        self._web_app_proc = subprocess.Popen([sys.executable, script],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        hostname = socket.gethostname()
+        try:
+            local_ip = socket.gethostbyname(hostname)
+        except Exception:
+            local_ip = "localhost"
+        self.root.after(2000, lambda: self._show_web_app_url(local_ip))
+
+    def _show_web_app_url(self, local_ip):
+        import socket as _s
+        port = 5000
+        port_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".web_port")
+        try:
+            with open(port_file) as f:
+                port = int(f.read().strip())
+        except Exception:
+            pass
+        # Check if server is actually running
+        try:
+            with _s.create_connection(("localhost", port), timeout=2):
+                pass
+        except Exception:
+            messagebox.showerror("Error", "Web app failed to start. Check terminal for errors.")
+            return
+        messagebox.showinfo("Phone App",
+                            f"Web app running!\n\n"
+                            f"Phone:  http://{local_ip}:{port}\n"
+                            f"Local:  http://localhost:{port}\n\n"
+                            f"Open this on your phone (same WiFi).")
+
     def _open_live_view(self, addr=None):
         if addr is None:
             addr = "raspberrypi.local"
@@ -1909,11 +1995,189 @@ class GrowGUI:
         ttk.Button(win, text="Save", style="Accent.TButton", command=save).pack(pady=8)
 
     # ----------------------------------------------------------- Timelapse
+    def _pick_photos_gui(self, start_dir):
+        """Custom in-app photo picker that lists files directly, bypassing the
+        system file dialog (which can show zero files in some environments)."""
+        from PIL import Image as PILImage
+        start_dir = os.path.abspath(start_dir or os.path.expanduser("~"))
+        current = {"dir": start_dir}
+        selected = {"paths": []}
+        img_cache = {}
+
+        win = tk.Toplevel(self.root)
+        win.title("Select Photos")
+        win.geometry("700x520")
+        win.configure(bg=BG)
+
+        addr = ttk.Frame(win)
+        addr.pack(fill="x", padx=8, pady=(8, 0))
+        folder_var = tk.StringVar(value=start_dir)
+        e = ttk.Entry(addr, textvariable=folder_var, font=("Consolas", 9))
+        e.pack(side="left", fill="x", expand=True)
+        def go():
+            target = os.path.expanduser(folder_var.get().strip())
+            if os.path.isdir(target):
+                current["dir"] = os.path.abspath(target)
+                refresh()
+        ttk.Button(addr, text="Go", command=go).pack(side="left", padx=(4, 0))
+        ttk.Button(addr, text="Up", command=lambda: (current.update({"dir": os.path.dirname(current["dir"])}), refresh())).pack(side="left", padx=(4, 0))
+
+        body = ttk.Frame(win)
+        body.pack(fill="both", expand=True, padx=8, pady=8)
+        canvas = tk.Canvas(body, bg=BG_CARD, highlightthickness=0)
+        vsb = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        items_frame = tk.Frame(canvas, bg=BG_CARD)
+        win_id = canvas.create_window((0, 0), window=items_frame, anchor="nw", width=660)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win_id, width=e.width))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+        path_labels = []
+
+        def refresh():
+            for w in items_frame.winfo_children():
+                w.destroy()
+            path_labels.clear()
+            d = current["dir"]
+            folder_var.set(d)
+            entries = os.listdir(d)
+            folders = sorted([x for x in entries if os.path.isdir(os.path.join(d, x))])
+            files = sorted([x for x in entries if os.path.isfile(os.path.join(d, x))
+                            and x.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))])
+            for name in folders:
+                row = tk.Frame(items_frame, bg=BG_CARD)
+                row.pack(fill="x")
+                tk.Label(row, text="[D] " + name, bg=BG_CARD, fg=FG_ACCENT,
+                         anchor="w", cursor="hand2", font=("Consolas", 10)).pack(
+                    side="left", fill="x", expand=True)
+                row.bind("<Button-1>", lambda e, f=os.path.join(d, name): (current.update({"dir": f}), refresh()))
+                for w in row.winfo_children():
+                    w.bind("<Button-1>", lambda e, f=os.path.join(d, name): (current.update({"dir": f}), refresh()))
+            img_cache.clear()
+            for name in files:
+                fp = os.path.join(d, name)
+                row = tk.Frame(items_frame, bg=BG_CARD)
+                row.pack(fill="x")
+                tk.Label(row, text=name, bg=BG_CARD, fg=FG, anchor="w",
+                         font=("Consolas", 9)).pack(side="left", fill="x", expand=True)
+                var = tk.BooleanVar(value=False)
+                cb = tk.Checkbutton(row, variable=var, bg=BG_CARD, command=lambda p=fp, v=var: toggle(p, v))
+                cb.pack(side="left", padx=4)
+                path_labels.append((fp, var))
+            if not folders and not files:
+                tk.Label(items_frame, text="No images here", bg=BG_CARD, fg=FG_DIM).pack(pady=20)
+            items_frame.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def toggle(p, var):
+            if var.get():
+                if p not in selected["paths"]:
+                    selected["paths"].append(p)
+            else:
+                if p in selected["paths"]:
+                    selected["paths"].remove(p)
+
+        def done(ok):
+            win.destroy()
+            if not ok:
+                selected["paths"] = []
+            self._pick_result = list(selected["paths"]) if ok else []
+
+        bbar = ttk.Frame(win)
+        bbar.pack(fill="x", padx=8, pady=8)
+        ttk.Label(bbar, text="Tick photos to attach", style="Sub.TLabel").pack(side="left")
+        ttk.Button(bbar, text="Cancel", command=lambda: done(False)).pack(side="right")
+        ttk.Button(bbar, text="Add Selected", style="Accent.TButton",
+                   command=lambda: done(True)).pack(side="right", padx=(0, 6))
+
+        refresh()
+        win.grab_set()
+        self.root.wait_window(win)
+        return getattr(self, "_pick_result", []) or []
+
     def _tl_browse_folder(self):
-        folder = filedialog.askdirectory(title="Select timelapse folder")
+        initial = self.tl_folder_var.get().strip()
+        if not initial or not os.path.isdir(initial):
+            initial = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+            if not os.path.isdir(initial):
+                initial = os.path.expanduser("~")
+        folder = self._pick_folder_gui(initial)
         if folder:
             self.tl_folder_var.set(folder)
             self._tl_load_folder()
+
+    def _pick_folder_gui(self, start_dir):
+        """Custom in-app folder picker that lists folders directly, bypassing the
+        system folder dialog (which can show nothing in some environments)."""
+        start_dir = os.path.abspath(start_dir or os.path.expanduser("~"))
+        current = {"dir": start_dir}
+        result = {"path": ""}
+
+        win = tk.Toplevel(self.root)
+        win.title("Select Timelapse Folder")
+        win.geometry("620x460")
+        win.configure(bg=BG)
+
+        addr = ttk.Frame(win)
+        addr.pack(fill="x", padx=8, pady=(8, 0))
+        folder_var = tk.StringVar(value=start_dir)
+        e = ttk.Entry(addr, textvariable=folder_var, font=("Consolas", 9))
+        e.pack(side="left", fill="x", expand=True)
+        def go():
+            target = os.path.expanduser(folder_var.get().strip())
+            if os.path.isdir(target):
+                current["dir"] = os.path.abspath(target)
+                refresh()
+        ttk.Button(addr, text="Go", command=go).pack(side="left", padx=(4, 0))
+        ttk.Button(addr, text="Up", command=lambda: (current.update({"dir": os.path.dirname(current["dir"])}), refresh())).pack(side="left", padx=(4, 0))
+
+        listbox_frame = ttk.Frame(win)
+        listbox_frame.pack(fill="both", expand=True, padx=8, pady=8)
+        lb = tk.Listbox(listbox_frame, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
+                        selectforeground="white", font=("Consolas", 10), relief="flat", activestyle="none")
+        sb = ttk.Scrollbar(listbox_frame, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        lb.pack(side="left", fill="both", expand=True)
+
+        def open_selected():
+            sel = lb.curselection()
+            if not sel:
+                return
+            name = lb.get(sel[0])
+            target = os.path.join(current["dir"], name)
+            if os.path.isdir(target):
+                current["dir"] = os.path.abspath(target)
+            refresh()
+
+        def enter_dir():
+            result["path"] = current["dir"]
+            win.destroy()
+
+        def refresh():
+            lb.delete(0, "end")
+            d = current["dir"]
+            folder_var.set(d)
+            folders = sorted([x for x in os.listdir(d) if os.path.isdir(os.path.join(d, x)) and not x.startswith(".")])
+            for name in folders:
+                n = len([f for f in os.listdir(os.path.join(d, name))
+                         if f.lower().endswith((".jpg", ".jpeg", ".png"))]) if not os.path.islink(os.path.join(d, name)) else 0
+                lb.insert("end", f"{name}   ({n} photos)" if n else name)
+            lb.bind("<Double-Button-1>", lambda e: open_selected())
+            lb.bind("<Return>", lambda e: open_selected())
+
+        bbar = ttk.Frame(win)
+        bbar.pack(fill="x", padx=8, pady=8)
+        ttk.Label(bbar, text="Double-click a folder to enter. Pick the grow folder.", style="Sub.TLabel").pack(side="left")
+        ttk.Button(bbar, text="Cancel", command=win.destroy).pack(side="right")
+        ttk.Button(bbar, text="Use This Folder", style="Accent.TButton", command=enter_dir).pack(side="right", padx=(0, 6))
+
+        refresh()
+        win.grab_set()
+        self.root.wait_window(win)
+        return result["path"]
 
     def _tl_refresh_grows(self):
         history = load_history(DEFAULT_HISTORY)
@@ -2023,10 +2287,8 @@ class GrowGUI:
             return
         self._tl_thumb_cache.clear()
         self._tl_dates.clear()
-        for fname in sorted(os.listdir(folder)):
-            if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
-                continue
-            fpath = os.path.join(folder, fname)
+
+        def date_from_any(fpath, fname):
             date_str = ""
             if len(fname) >= 10 and fname[4] == "-" and fname[7] == "-":
                 date_str = fname[:10]
@@ -2041,9 +2303,18 @@ class GrowGUI:
                     date_str = dt.strftime("%Y-%m-%d")
                 except Exception:
                     date_str = "Unknown"
-            if date_str not in self._tl_dates:
-                self._tl_dates[date_str] = []
-            self._tl_dates[date_str].append(fpath)
+            return date_str
+
+        for root_dir, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fname in sorted(files):
+                if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
+                fpath = os.path.join(root_dir, fname)
+                date_str = date_from_any(fpath, fname)
+                if date_str not in self._tl_dates:
+                    self._tl_dates[date_str] = []
+                self._tl_dates[date_str].append(fpath)
         self._refresh_timelapse_dates()
 
     def _refresh_timelapse_dates(self):
@@ -2076,7 +2347,7 @@ class GrowGUI:
             item.destroy()
         self._tl_photo_items.clear()
         self._tl_photos.clear()
-        self._tl_pending_paths = list(paths)
+        self._tl_pending_paths = sorted(list(paths), key=lambda p: os.path.basename(p))
         self._tl_loaded_count = 0
         self._tl_load_batch()
         self.tl_canvas.yview_moveto(0)
@@ -2227,6 +2498,7 @@ class GrowGUI:
             for paths in self._tl_dates.values():
                 all_paths.extend(paths)
         self.tl_slideshow_paths = [p for p in all_paths if p not in self._tl_excluded]
+        self.tl_slideshow_paths.sort(key=lambda p: os.path.basename(p))
         if not self.tl_slideshow_paths:
             return
         self.tl_slideshow_idx = 0

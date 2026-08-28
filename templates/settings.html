@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Settings - GrowLab{% endblock %}
+{% block content %}
+<div class="topbar">
+  <h1>Settings</h1>
+</div>
+
+<div class="card">
+  <h2>Pi Sync</h2>
+  <p style="font-size:13px;color:var(--dim);margin-bottom:8px">Sync timelapse photos from Raspberry Pi</p>
+  <button class="btn primary" id="syncBtn" onclick="doSync()">Sync Now</button>
+  <div id="syncStatus" style="margin-top:8px;font-size:13px;color:var(--dim)"></div>
+</div>
+
+<div class="card">
+  <h2>Plant Names</h2>
+  {% if plant_names %}
+  <ul class="list" style="margin:0 -14px">
+    {% for name in plant_names %}
+    <li>{{ name }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p style="color:var(--dim);font-size:13px">No plant names saved yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>System</h2>
+  <div style="font-size:13px;color:var(--dim)">
+    <div>Data: ~/plant-monitor/data/</div>
+    <div>History entries: {{ plant_names|length if plant_names else 0 }} plant(s)</div>
+    <div style="margin-top:8px">
+      <a href="http://localhost:5000" style="font-size:13px">Desktop: localhost:5000</a>
+    </div>
+  </div>
+</div>
+
+<script>
+function doSync() {
+  const btn = document.getElementById('syncBtn');
+  const status = document.getElementById('syncStatus');
+  btn.disabled = true; btn.textContent = 'Syncing...';
+  status.textContent = 'Syncing timelapse from Pi...';
+  fetch('/api/sync', {method:'POST'}).then(r=>r.json()).then(d=>{
+    status.textContent = 'Sync started. Photos will appear in timelapse view.';
+    btn.disabled = false; btn.textContent = 'Sync Now';
+  }).catch(()=>{
+    status.textContent = 'Sync request sent (running in background).';
+    btn.disabled = false; btn.textContent = 'Sync Now';
+  });
+}
+</script>
+{% endblock %}

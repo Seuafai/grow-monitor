@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}GrowLab - Home{% endblock %}
+{% block content %}
+<div class="topbar">
+  <h1>GrowLab</h1>
+  <div class="spacer"></div>
+  <button class="btn sm secondary" onclick="fetch('/api/sync',{method:'POST'}).then(()=>alert('Syncing...'))">Sync Pi</button>
+</div>
+
+{% if grows %}
+{% for name, grow in grows.items() %}
+<a href="/grow/{{ name }}" class="card" style="display:block;text-decoration:none;color:inherit">
+  <h2>{{ name }}</h2>
+  {% for gid, g in grow.grows.items() %}
+  <span class="badge blue">#{{ gid }}</span>
+  <span style="color:var(--dim);font-size:13px;margin-left:4px">{{ g.entries|length }} entries</span>
+  {% endfor %}
+</a>
+{% endfor %}
+{% else %}
+<div class="empty">
+  <p>No grows yet.</p>
+  <p style="margin-top:8px">Add entries from the desktop app.</p>
+</div>
+{% endif %}
+
+{% if plant_names %}
+<div class="card">
+  <h3>Plant Names</h3>
+  <p style="color:var(--dim);font-size:13px">{{ plant_names|join(', ') }}</p>
+</div>
+{% endif %}
+{% endblock %}
