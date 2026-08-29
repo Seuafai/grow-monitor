@@ -805,20 +805,10 @@ class GrowGUI:
         pf = ttk.Frame(form)
         pf.pack(fill="x", **pad)
         def browse_photos():
-            base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
-            if os.path.isdir(base):
-                first = None
-                for name in sorted(os.listdir(base)):
-                    full = os.path.join(base, name)
-                    if os.path.isdir(full) and not name.startswith("."):
-                        first = full
-                        break
-                if first:
-                    base = first
-            sel_paths = self._pick_photos_gui(base)
-            if sel_paths:
-                form.image_paths.extend(sel_paths)
-                form.image_types.extend([form.photo_type_var.get()] * len(sel_paths))
+            paths = filedialog.askopenfilenames(filetypes=[("Images", "*.jpg *.jpeg *.png *.webp")])
+            if paths:
+                form.image_paths.extend(paths)
+                form.image_types.extend([form.photo_type_var.get()] * len(paths))
                 refresh_thumbs()
         ttk.Button(pf, text="Add Photos...", command=browse_photos).pack(side="left")
         def clear_photos():
@@ -1995,108 +1985,6 @@ class GrowGUI:
         ttk.Button(win, text="Save", style="Accent.TButton", command=save).pack(pady=8)
 
     # ----------------------------------------------------------- Timelapse
-    def _pick_photos_gui(self, start_dir):
-        """Custom in-app photo picker that lists files directly, bypassing the
-        system file dialog (which can show zero files in some environments)."""
-        from PIL import Image as PILImage
-        start_dir = os.path.abspath(start_dir or os.path.expanduser("~"))
-        current = {"dir": start_dir}
-        selected = {"paths": []}
-        img_cache = {}
-
-        win = tk.Toplevel(self.root)
-        win.title("Select Photos")
-        win.geometry("700x520")
-        win.configure(bg=BG)
-
-        addr = ttk.Frame(win)
-        addr.pack(fill="x", padx=8, pady=(8, 0))
-        folder_var = tk.StringVar(value=start_dir)
-        e = ttk.Entry(addr, textvariable=folder_var, font=("Consolas", 9))
-        e.pack(side="left", fill="x", expand=True)
-        def go():
-            target = os.path.expanduser(folder_var.get().strip())
-            if os.path.isdir(target):
-                current["dir"] = os.path.abspath(target)
-                refresh()
-        ttk.Button(addr, text="Go", command=go).pack(side="left", padx=(4, 0))
-        ttk.Button(addr, text="Up", command=lambda: (current.update({"dir": os.path.dirname(current["dir"])}), refresh())).pack(side="left", padx=(4, 0))
-
-        body = ttk.Frame(win)
-        body.pack(fill="both", expand=True, padx=8, pady=8)
-        canvas = tk.Canvas(body, bg=BG_CARD, highlightthickness=0)
-        vsb = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        items_frame = tk.Frame(canvas, bg=BG_CARD)
-        win_id = canvas.create_window((0, 0), window=items_frame, anchor="nw", width=660)
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win_id, width=e.width))
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
-
-        path_labels = []
-
-        def refresh():
-            for w in items_frame.winfo_children():
-                w.destroy()
-            path_labels.clear()
-            d = current["dir"]
-            folder_var.set(d)
-            entries = os.listdir(d)
-            folders = sorted([x for x in entries if os.path.isdir(os.path.join(d, x))])
-            files = sorted([x for x in entries if os.path.isfile(os.path.join(d, x))
-                            and x.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))])
-            for name in folders:
-                row = tk.Frame(items_frame, bg=BG_CARD)
-                row.pack(fill="x")
-                tk.Label(row, text="[D] " + name, bg=BG_CARD, fg=FG_ACCENT,
-                         anchor="w", cursor="hand2", font=("Consolas", 10)).pack(
-                    side="left", fill="x", expand=True)
-                row.bind("<Button-1>", lambda e, f=os.path.join(d, name): (current.update({"dir": f}), refresh()))
-                for w in row.winfo_children():
-                    w.bind("<Button-1>", lambda e, f=os.path.join(d, name): (current.update({"dir": f}), refresh()))
-            img_cache.clear()
-            for name in files:
-                fp = os.path.join(d, name)
-                row = tk.Frame(items_frame, bg=BG_CARD)
-                row.pack(fill="x")
-                tk.Label(row, text=name, bg=BG_CARD, fg=FG, anchor="w",
-                         font=("Consolas", 9)).pack(side="left", fill="x", expand=True)
-                var = tk.BooleanVar(value=False)
-                cb = tk.Checkbutton(row, variable=var, bg=BG_CARD, command=lambda p=fp, v=var: toggle(p, v))
-                cb.pack(side="left", padx=4)
-                path_labels.append((fp, var))
-            if not folders and not files:
-                tk.Label(items_frame, text="No images here", bg=BG_CARD, fg=FG_DIM).pack(pady=20)
-            items_frame.update_idletasks()
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def toggle(p, var):
-            if var.get():
-                if p not in selected["paths"]:
-                    selected["paths"].append(p)
-            else:
-                if p in selected["paths"]:
-                    selected["paths"].remove(p)
-
-        def done(ok):
-            win.destroy()
-            if not ok:
-                selected["paths"] = []
-            self._pick_result = list(selected["paths"]) if ok else []
-
-        bbar = ttk.Frame(win)
-        bbar.pack(fill="x", padx=8, pady=8)
-        ttk.Label(bbar, text="Tick photos to attach", style="Sub.TLabel").pack(side="left")
-        ttk.Button(bbar, text="Cancel", command=lambda: done(False)).pack(side="right")
-        ttk.Button(bbar, text="Add Selected", style="Accent.TButton",
-                   command=lambda: done(True)).pack(side="right", padx=(0, 6))
-
-        refresh()
-        win.grab_set()
-        self.root.wait_window(win)
-        return getattr(self, "_pick_result", []) or []
-
     def _tl_browse_folder(self):
         initial = self.tl_folder_var.get().strip()
         if not initial or not os.path.isdir(initial):
