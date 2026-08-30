@@ -483,10 +483,10 @@ class GrowGUI:
                 continue
             safe_name = name.replace("#", "").replace(" ", "_").strip()
             local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
-            pi_dir = "~/plant-monitor/data/photos/timelapse"
+            pi_source = f"~/plant-monitor/data/photos/timelapse/{safe_name}"
             os.makedirs(local_dir, exist_ok=True)
 
-            def sync_folder(ld=local_dir, pd=pi_dir):
+            def sync_folder(ld=local_dir, pd=pi_source):
                 try:
                     result = subprocess.run(
                         ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
@@ -497,7 +497,7 @@ class GrowGUI:
                     if not files:
                         return
                     subprocess.run(
-                        ["rsync", "-az", "--timeout=10", "--relative",
+                        ["rsync", "-az", "--timeout=10",
                          f"hawkewing@raspberrypi.local:{pd}/", ld + "/"],
                         timeout=120,
                     )
@@ -650,7 +650,6 @@ class GrowGUI:
         self.tl_folder.pack(side="left", fill="x", expand=True, padx=(4, 0))
         ttk.Button(ff, text="Browse...", command=self._tl_browse_folder).pack(side="left", padx=(4, 0))
         ttk.Button(ff, text="Sync from Pi", command=self._tl_sync_from_pi).pack(side="left", padx=(4, 0))
-        ttk.Button(ff, text="Load", command=self._tl_load_folder).pack(side="left", padx=(4, 0))
 
         # -- Playback controls --
         sf = ttk.Frame(container)
@@ -2092,11 +2091,12 @@ class GrowGUI:
         if not grow_name:
             messagebox.showwarning("Missing", "Select a timelapse grow first.")
             return
-        local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{grow_name}")
-        pi_dir = "~/plant-monitor/data/photos/timelapse"
-        os.makedirs(local_dir, exist_ok=True)
         addr = "raspberrypi.local"
         user = "hawkewing"
+        local_base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+        pi_base = "~/plant-monitor/data/photos/timelapse"
+        local_dir = os.path.join(local_base, grow_name)
+        os.makedirs(local_dir, exist_ok=True)
         self.tl_folder_var.set(local_dir)
 
         def set_status(msg, color=FG_DIM):
@@ -2107,24 +2107,18 @@ class GrowGUI:
                 set_status("Connecting to Pi...", "#e0a030")
                 result = subprocess.run(
                     ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                     f"{user}@{addr}", f"find {pi_dir} -name '*.jpg' -type f 2>/dev/null"],
+                     f"{user}@{addr}", f"find {pi_base}/{grow_name} -name '*.jpg' -type f 2>/dev/null"],
                     capture_output=True, text=True, timeout=10,
                 )
                 files = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
                 if not files:
-                    set_status("No photos on Pi", "#e0a030")
+                    set_status("No photos on Pi for this grow", "#e0a030")
                     return
                 set_status(f"Syncing {len(files)} files...", "#e0a030")
                 subprocess.run(
-                    ["rsync", "-az", "--timeout=10", "--relative",
-                     f"{user}@{addr}:{pi_dir}/", local_dir + "/"],
+                    ["rsync", "-az", "--timeout=10",
+                     f"{user}@{addr}:{pi_base}/{grow_name}/", local_dir + "/"],
                     timeout=120,
-                )
-                set_status("Cleaning up Pi...", "#e0a030")
-                subprocess.run(
-                    ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                     f"{user}@{addr}", f"rm -f {pi_dir}/*.jpg"],
-                    capture_output=True, timeout=10,
                 )
                 self.root.after(0, self._tl_load_folder)
                 set_status(f"Synced {len(files)} files", GREEN)
