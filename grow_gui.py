@@ -340,8 +340,9 @@ class GrowGUI:
         self._tl_photo_items = []
         self._tl_thumb_cache = {}
         self._tl_pending_paths = []
-        self._tl_loaded_count = 0
         self._tl_batch_size = 20
+        self._tl_worker_lock = threading.Lock()
+        self._tl_generation_token = None
         self.tl_slideshow_id = None
         self.tl_slideshow_idx = 0
         self.tl_slideshow_paths = []
@@ -689,10 +690,11 @@ class GrowGUI:
         self.tl_canvas.pack(side="left", fill="both", expand=True)
         self.tl_grid_frame = ttk.Frame(self.tl_canvas)
         self.tl_canvas_window = self.tl_canvas.create_window((0, 0), window=self.tl_grid_frame, anchor="nw")
-        self.tl_canvas.bind("<Configure>", lambda e: self.tl_canvas.itemconfig(self.tl_canvas_window, width=e.width))
-        self.tl_canvas.bind("<MouseWheel>", self._tl_on_scroll)
-        self.tl_canvas.bind("<Button-4>", self._tl_on_scroll)
-        self.tl_canvas.bind("<Button-5>", self._tl_on_scroll)
+        self.tl_canvas.bind("<Configure>", lambda e: (self.tl_canvas.itemconfig(self.tl_canvas_window, width=e.width), self._tl_render_visible()))
+        self.tl_canvas.bind("<MouseWheel>", lambda e: self._tl_render_visible())
+        self.tl_canvas.bind("<Button-4>", lambda e: self._tl_render_visible())
+        self.tl_canvas.bind("<Button-5>", lambda e: self._tl_render_visible())
+        self.tl_scroll.config(command=lambda *a: (self.tl_canvas.yview(*a), self._tl_render_visible()))
         self.tl_photos = []
         self.tl_photo_items = []
 
@@ -2114,12 +2116,33 @@ class GrowGUI:
                 if not files:
                     set_status("No photos on Pi for this grow", "#e0a030")
                     return
-                set_status(f"Syncing {len(files)} files...", "#e0a030")
-                subprocess.run(
-                    ["rsync", "-az", "--timeout=10",
+                proc = subprocess.Popen(
+                    ["rsync", "-az", "--timeout=10", "--info=progress2",
                      f"{user}@{addr}:{pi_base}/{grow_name}/", local_dir + "/"],
-                    timeout=120,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
                 )
+                last = ""
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if "xfr#" in line or line.startswith(" ") and "%" in line:
+                        pct = None
+                        parts = line.split()
+                        for prt in parts:
+                            if prt.endswith("%") and "/" not in prt:
+                                try:
+                                    pct = float(prt.rstrip("%"))
+                                except ValueError:
+                                    pct = None
+                                break
+                        if pct is not None:
+                            pct = min(pct, 100.0)
+                            if int(pct) != last:
+                                last = int(pct)
+                                set_status(f"Syncing from Pi... {int(pct)}%", "#e0a030")
+                proc.wait()
                 self.root.after(0, self._tl_load_folder)
                 set_status(f"Synced {len(files)} files", GREEN)
             except Exception as e:
@@ -2230,49 +2253,118 @@ class GrowGUI:
         self._tl_photo_items.clear()
         self._tl_photos.clear()
         self._tl_pending_paths = sorted(list(paths), key=lambda p: os.path.basename(p))
-        self._tl_loaded_count = 0
-        self._tl_load_batch()
+        token = object()
+        self._tl_generation_token = token
         self.tl_canvas.yview_moveto(0)
+        tw = self._tl_thumb_render_size()
+        th = int(tw * 0.66)
+        threading.Thread(target=self._tl_build_all_thumbs, args=(token, tw, th), daemon=True).start()
 
-    def _tl_load_batch(self):
-        if self._tl_loaded_count >= len(self._tl_pending_paths):
+    def _tl_build_all_thumbs(self, token, tw, th):
+        paths = list(self._tl_pending_paths)
+        idx = 0
+        BATCH = 12
+        while True:
+            if self._tl_generation_token is not token:
+                return
+            if idx >= len(paths):
+                return
+            end = min(idx + BATCH, len(paths))
+            batch = paths[idx:end]
+            try:
+                from PIL import Image as PILImage
+                for p in batch:
+                    try:
+                        img = PILImage.open(p)
+                        img.thumbnail((tw, th), PILImage.LANCZOS)
+                        img = img.convert("RGB")
+                        thumb_path = self._tl_disk_thumb(p)
+                        img.save(thumb_path, "JPEG", quality=72)
+                        self._tl_thumb_cache[p] = thumb_path
+                    except Exception:
+                        self._tl_thumb_cache[p] = None
+            except Exception:
+                pass
+            self.root.after(0, lambda b=batch, t=token: self._tl_append_batch(b, t))
+            idx = end
+
+    def _tl_disk_thumb(self, path):
+        day_dir = os.path.dirname(path)
+        td = os.path.join(day_dir, ".thumbs")
+        os.makedirs(td, exist_ok=True)
+        base = os.path.splitext(os.path.basename(path))[0]
+        return os.path.join(td, base + ".jpg")
+
+    def _tl_append_batch(self, batch, token):
+        if self._tl_generation_token is not token:
             return
-        end = min(self._tl_loaded_count + self._tl_batch_size, len(self._tl_pending_paths))
-        batch = self._tl_pending_paths[self._tl_loaded_count:end]
-        missing = [p for p in batch if p not in self._tl_thumb_cache]
-        if missing:
-            self._tl_gen_thumbs(missing)
         cols = 2
-        for i, path in enumerate(batch, start=self._tl_loaded_count):
-            if path in self._tl_thumb_cache and self._tl_thumb_cache[path] is not None:
-                self._tl_add_widget(path, i, cols)
-            else:
-                self._tl_add_placeholder(path)
-        self._tl_loaded_count = end
+        i = len(self._tl_photo_items)
+        for path in batch:
+            self._tl_add_widget(path, i, cols, deferred=True)
+            i += 1
         self.tl_grid_frame.update_idletasks()
         self.tl_canvas.configure(scrollregion=self.tl_canvas.bbox("all"))
+        self._tl_render_visible()
 
-    def _tl_gen_thumbs(self, paths):
-        from PIL import Image as PILImage
+    def _tl_render_visible(self):
+        if not getattr(self, "tl_canvas", None):
+            return
+        widget_items = self._tl_photo_items
+        if not widget_items:
+            return
+        try:
+            top = self.tl_canvas.canvasy(0)
+            bot = top + self.tl_canvas.winfo_height()
+        except Exception:
+            return
+        margin = 200
+        for i, frame in enumerate(widget_items):
+            try:
+                y = frame.winfo_y()
+            except Exception:
+                continue
+            visible = (y + margin) >= top - margin and (y - margin) <= (bot + margin)
+            ref = getattr(frame, "_tl_pixmap", None)
+            if visible and ref is None:
+                self._tl_frame_materialize(frame)
+            elif not visible and ref is not None:
+                for child in frame.winfo_children():
+                    if isinstance(child, tk.Label) and getattr(child, "_tl_is_img", False):
+                        child.config(image="")
+                frame._tl_pixmap = None
+
+    def _tl_frame_materialize(self, frame):
+        idx = self._tl_photo_items.index(frame) if frame in self._tl_photo_items else 0
+        if idx >= len(self._tl_pending_paths):
+            return
+        path = self._tl_pending_paths[idx]
+        refs = {}
+        for child in frame.winfo_children():
+            if isinstance(child, tk.Label) and getattr(child, "_tl_is_img", False):
+                tp = self._tl_thumb_cache.get(path)
+                if not tp or not os.path.isfile(tp):
+                    child.config(image="")
+                    continue
+                try:
+                    photo = ImageTk.PhotoImage(file=tp)
+                except Exception:
+                    child.config(image="")
+                    continue
+                child.config(image=photo)
+                child.config(width="", height="")
+                refs[child] = photo
+                frame.config(width=photo.width(), height=photo.height())
+                frame.grid_propagate(False)
+        frame._tl_pixmap = refs or None
+
+    def _tl_thumb_render_size(self):
         cw = self.tl_canvas.winfo_width()
         if cw < 100:
             cw = 800
-        tw = max(cw // 2 - 10, 300)
-        th = int(tw * 0.67)
-        for p in paths:
-            try:
-                img = PILImage.open(p)
-                img.thumbnail((tw, th), PILImage.LANCZOS)
-                self._tl_thumb_cache[p] = img.copy()
-            except Exception:
-                self._tl_thumb_cache[p] = None
+        return max(cw // 2 - 10, 300)
 
-    def _tl_add_placeholder(self, path):
-        cols = 2
-        i = len(self._tl_photo_items)
-        self._tl_add_widget(path, i, cols, placeholder=True)
-
-    def _tl_add_widget(self, path, i, cols, placeholder=False):
+    def _tl_add_widget(self, path, i, cols, placeholder=False, deferred=False):
         row, col = divmod(i, cols)
         excluded = path in self._tl_excluded
         selected = path in self._tl_selected
@@ -2282,23 +2374,18 @@ class GrowGUI:
             bg = "#1f3a5f"
         else:
             bg = BG_CARD
-        frame = tk.Frame(self.tl_grid_frame, bg=bg, bd=1, relief="solid")
+        render_w = self._tl_thumb_render_size()
+        render_h = int(render_w * 0.66)
+        frame = tk.Frame(self.tl_grid_frame, bg=bg, bd=1, relief="solid",
+                         width=render_w, height=render_h)
         frame.grid(row=row, column=col, padx=3, pady=3)
+        frame.grid_propagate(False)
 
-        if placeholder or path not in self._tl_thumb_cache:
-            lbl = tk.Label(frame, text="Loading...", bg=bg, fg=FG_DIM, width=30, height=12)
-            lbl.pack()
-            lbl._tl_path = path
-        else:
-            cached = self._tl_thumb_cache[path]
-            if cached:
-                photo = ImageTk.PhotoImage(cached)
-                lbl = tk.Label(frame, image=photo, bg=bg, cursor="hand2")
-                lbl._tl_thumb_ref = photo
-            else:
-                lbl = tk.Label(frame, text="Error", bg=bg, fg=FG_DIM)
-            lbl.pack()
-            lbl._tl_path = path
+        img_lbl = tk.Label(frame, text="Loading...", bg=bg, fg=FG_DIM)
+        img_lbl._tl_is_img = True
+        img_lbl.pack(fill="both", expand=True)
+        img_lbl._tl_path = path
+        lbl = img_lbl
         lbl.bind("<Button-1>", lambda e, p=path, w=lbl: self._tl_toggle_select(p, w))
         lbl.bind("<Button-3>", lambda e, p=path: self._tl_rotate_photo(p))
         ts = os.path.basename(path)
@@ -2306,13 +2393,14 @@ class GrowGUI:
             ts = ts[:17] + "..."
         info_row = tk.Frame(frame, bg=bg)
         info_row.pack(fill="x")
-        lbl2 = tk.Label(info_row, text=ts, bg=bg, fg=FG_DIM, font=("Segoe UI", 7), wraplength=500)
+        lbl2 = tk.Label(info_row, text=ts, bg=bg, fg=FG_DIM, font=("Segoe UI", 8), wraplength=500)
         lbl2.pack(side="left", fill="x", expand=True)
         del_btn = tk.Label(info_row, text="\u2715", bg=bg, fg="#e04040", font=("Segoe UI", 8, "bold"), cursor="hand2")
         del_btn.pack(side="right", padx=2)
         del_btn.bind("<Button-1>", lambda e, p=path: self._tl_delete_photo(p))
         if excluded:
             lbl2.config(text="EXCLUDED")
+        frame._tl_pixmap = None
         self._tl_photo_items.append(frame)
 
     def _tl_toggle_select(self, path, widget):
@@ -2324,16 +2412,6 @@ class GrowGUI:
         else:
             self._tl_selected.add(path)
             widget.master.config(bg="#1f3a5f")
-
-    def _tl_on_scroll(self, event):
-        if self._tl_loaded_count >= len(self._tl_pending_paths):
-            return
-        bottom = self.tl_canvas.bbox("all")
-        if not bottom:
-            return
-        view_top, view_bot = self.tl_canvas.yview()
-        if view_bot > 0.85:
-            self._tl_load_batch()
 
     def _tl_get_selected_paths(self):
         sel = self.tl_date_list.curselection()
