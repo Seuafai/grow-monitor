@@ -454,11 +454,24 @@ class GrowGUI:
         tk.Button(self.tl_status_frame, text="Restart", command=self._tl_restart,
                   bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 7),
                   bd=0, padx=4, pady=1, cursor="hand2").pack(side="right")
+        tk.Button(self.tl_status_frame, text="Settings", command=self._tl_settings,
+                  bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 7),
+                  bd=0, padx=4, pady=1, cursor="hand2").pack(side="right", padx=(4, 0))
 
         # --- Separator ---
         tk.Frame(self.sidebar, bg=BORDER, height=1).pack(fill="x", padx=10, pady=10)
 
         # --- Bottom buttons ---
+        live_res_frame = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
+        live_res_frame.pack(fill="x", padx=8, pady=(0, 2))
+        tk.Label(live_res_frame, text="Live Camera Res:", bg=SIDEBAR_BG, fg=FG_DIM,
+                 font=("Segoe UI", 8)).pack(side="left")
+        self.live_res_var = tk.StringVar(value="640x480 (4:3)")
+        self.live_res_options = ["1920x1080 (16:9)", "1280x720 (16:9)",
+                                 "640x480 (4:3)", "1280x960 (4:3)", "800x600 (4:3)"]
+        tk.ttk.Combobox(live_res_frame, textvariable=self.live_res_var, state="readonly",
+                        values=self.live_res_options, width=13).pack(side="right", padx=(4, 0))
+
         tk.Button(self.sidebar, text="Live View", command=self._open_live_view,
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 9),
                   bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
@@ -543,7 +556,7 @@ class GrowGUI:
                 subprocess.run(
                     ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
                      "hawkewing@raspberrypi.local",
-                     "pkill -f timelapse.py; sleep 1; cd ~/plant-monitor && nohup python3 scripts/timelapse.py > logs/timelapse.log 2>&1 &"],
+                     "pkill -f '[t]imelapse.py'; sleep 1; cd ~/plant-monitor && nohup python3 scripts/timelapse.py > logs/timelapse.log 2>&1 &"],
                     capture_output=True, timeout=15,
                 )
                 time.sleep(2)
@@ -551,6 +564,153 @@ class GrowGUI:
             except Exception:
                 self.root.after(0, lambda: self._update_tl_status(None))
         threading.Thread(target=do_restart, daemon=True).start()
+
+    def _tl_settings(self):
+        pi_cfg_path = "~/plant-monitor/scripts/timelapse_config.json"
+        pi_user_host = "hawkewing@raspberrypi.local"
+        RES_OPTIONS = [
+            "1920x1080 (16:9)",
+            "640x480 (4:3)",
+            "1280x960 (4:3)",
+            "800x600 (4:3)",
+            "1920x1440 (4:3)",
+        ]
+
+        def read_config():
+            try:
+                r = subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                     pi_user_host, f"cat {pi_cfg_path} 2>/dev/null"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    cfg = json.loads(r.stdout)
+                    cfg.setdefault("interval_minutes", 10)
+                    cfg.setdefault("start_time", "06:00")
+                    cfg.setdefault("end_time", "22:00")
+                    cfg.setdefault("width", 1920)
+                    cfg.setdefault("height", 1080)
+                    return cfg
+            except Exception:
+                pass
+            return None
+
+        cfg = read_config()
+        if cfg is None:
+            messagebox.showerror("Timelapse Settings",
+                                 "Could not read timelapse config from the Pi.\n"
+                                 "Check that the Pi is reachable (ssh hawkewing@raspberrypi.local).")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Timelapse Settings")
+        win.configure(bg=BG_CARD)
+        win.transient(self.root)
+        win.resizable(False, False)
+
+        body = tk.Frame(win, bg=BG_CARD)
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+
+        def row(label_text):
+            f = tk.Frame(body, bg=BG_CARD)
+            f.pack(fill="x", pady=3)
+            tk.Label(f, text=label_text, bg=BG_CARD, fg=FG, font=("Segoe UI", 9),
+                     width=16, anchor="w").pack(side="left")
+            return f
+
+        r_int = row("Interval (min):")
+        var_int = tk.StringVar(value=str(cfg.get("interval_minutes", 10)))
+        tk.Spinbox(r_int, from_=1, to=1440, textvariable=var_int, width=8).pack(side="left")
+
+        r_start = row("Start time:")
+        var_start = tk.StringVar(value=str(cfg.get("start_time", "06:00")))
+        tk.Entry(r_start, textvariable=var_start, width=8).pack(side="left")
+
+        r_end = row("End time:")
+        var_end = tk.StringVar(value=str(cfg.get("end_time", "22:00")))
+        tk.Entry(r_end, textvariable=var_end, width=8).pack(side="left")
+
+        r_res = row("Resolution:")
+        w = cfg.get("width", 1920); h = cfg.get("height", 1080)
+        cur = f"{w}x{h}" + (" (16:9)" if h and h * 16 == w * 9 else " (4:3)")
+        if cur not in RES_OPTIONS:
+            RES_OPTIONS = [cur] + RES_OPTIONS
+        var_res = tk.StringVar(value=cur)
+        tk.ttk.Combobox(r_res, textvariable=var_res, state="readonly",
+                        values=RES_OPTIONS, width=16).pack(side="left")
+
+        tk.Label(body, text="Start/end use HH:MM 24h format. Photos only taken",
+                 bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 7)).pack(anchor="w", pady=(8, 0))
+        tk.Label(body, text="during light hours between those times.",
+                 bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 7)).pack(anchor="w")
+
+        def on_save():
+            try:
+                minutes = int(var_int.get().strip())
+                if not (1 <= minutes <= 1440):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid", "Interval must be a whole number of minutes (1-1440).", parent=win)
+                return
+            st = var_start.get().strip()
+            en = var_end.get().strip()
+            try:
+                datetime.strptime(st, "%H:%M")
+                datetime.strptime(en, "%H:%M")
+            except ValueError:
+                messagebox.showerror("Invalid", "Start and End time must be HH:MM (24-hour).", parent=win)
+                return
+            res = var_res.get().split(" (")[0].strip()
+            try:
+                w, h = (int(x) for x in res.split("x"))
+            except ValueError:
+                w, h = 1920, 1080
+
+            new_cfg = dict(cfg)
+            new_cfg["interval_minutes"] = minutes
+            new_cfg["start_time"] = st
+            new_cfg["end_time"] = en
+            new_cfg["width"] = w
+            new_cfg["height"] = h
+
+            status_label.config(text="Saving to Pi...")
+            win.update_idletasks()
+
+            def write_and_apply():
+                try:
+                    text = json.dumps(new_cfg, indent=2)
+                    r = subprocess.run(
+                        ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                         pi_user_host, f"cat > {pi_cfg_path} <<'EOF'\n{text}\nEOF"],
+                        capture_output=True, timeout=10,
+                    )
+                    if r.returncode != 0:
+                        self.root.after(0, lambda: status_label.config(
+                            text=f"Failed to write config (ssh rc={r.returncode})", foreground="#e04040"))
+                        return
+                    self.root.after(0, win.destroy)
+                    self.root.after(0, lambda: self.tl_status_text.config(text="Setting applied..."))
+                    self._tl_restart()
+                except Exception as e:
+                    self.root.after(0, lambda: status_label.config(text=f"Error: {e}", foreground="#e04040"))
+            threading.Thread(target=write_and_apply, daemon=True).start()
+
+        def on_cancel():
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", on_cancel)
+
+        btns = tk.Frame(win, bg=BG_CARD)
+        btns.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Button(btns, text="Cancel", command=on_cancel, bg=BG_CARD, fg=FG,
+                  font=("Segoe UI", 9), bd=0, padx=10, pady=3).pack(side="right")
+        tk.Button(btns, text="Save & Restart", command=on_save, bg="#1a3a5f", fg=FG,
+                  font=("Segoe UI", 9, "bold"), bd=0, padx=10, pady=3).pack(side="right", padx=(0, 6))
+        status_label = tk.Label(btns, text="", bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 8))
+        status_label.pack(side="left")
+
+        win.grab_set()
+        win.update_idletasks()
+        win.geometry("")
 
     def _start_timelapse_monitor(self):
         self._check_timelapse_status()
@@ -1501,13 +1661,18 @@ class GrowGUI:
         if not addr:
             messagebox.showwarning("Missing", "Enter the Pi's address.")
             return
+        try:
+            res_val = self.live_res_var.get().split(" (")[0].strip()
+            dw, dh = (int(x) for x in res_val.split("x"))
+        except Exception:
+            dw, dh = 640, 480
         win = tk.Toplevel(self.root)
-        win.title("Live View")
+        win.title(f"Live View -- {dw}x{dh}")
         win.geometry("680x560")
         win.configure(bg=BG)
         canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
         canvas.pack(expand=True, fill="both")
-        status = ttk.Label(win, text="Starting server on Pi...", style="Sub.TLabel")
+        status = ttk.Label(win, text=f"Starting server on Pi ({dw}x{dh})...", style="Sub.TLabel")
         status.pack(side="bottom", fill="x", padx=10, pady=6)
         url = f"http://{addr}:{port}/frame"
         running = [True]
@@ -1517,23 +1682,35 @@ class GrowGUI:
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_close)
 
+        def _current_server_ok():
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "GrowGUI"})
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    b = resp.read()
+                im = Image.open(io.BytesIO(b))
+                return (im.size[0], im.size[1]) == (dw, dh)
+            except Exception:
+                return False
+
         def start_server():
+            if _current_server_ok():
+                return
             host = addr
             user = "hawkewing"
             try:
-                result = subprocess.run(
+                subprocess.run(
                     ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                     f"{user}@{host}",
-                     "pgrep -f live_server.py"],
+                     f"{user}@{host}", "pkill -f '[l]ive_server.py' 2>/dev/null"],
                     capture_output=True, timeout=10,
                 )
-                if result.returncode == 0:
-                    return
+                time.sleep(1)
                 subprocess.run(
                     ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
                      f"{user}@{host}",
-                     "cd ~/plant-monitor && source ~/webcam-env/bin/activate && nohup python3 scripts/live_server.py > /dev/null 2>&1 & disown"],
-                    capture_output=True, timeout=10,
+                     "cd ~/plant-monitor && source ~/webcam-env/bin/activate && "
+                     f"nohup python3 scripts/live_server.py --port {port} --width {dw} --height {dh} "
+                     "</dev/null >/dev/null 2>&1 & disown"],
+                    capture_output=True, timeout=15,
                 )
                 time.sleep(4)
             except Exception:
@@ -1547,13 +1724,14 @@ class GrowGUI:
                     with urllib.request.urlopen(req, timeout=5) as resp:
                         data = resp.read()
                     img = Image.open(io.BytesIO(data))
-                    img = img.resize((640, 480), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
                     canvas.delete("all")
-                    canvas.create_image(320, 240, image=photo, anchor="center")
+                    cx = (canvas.winfo_width() or dw) // 2
+                    cy = (canvas.winfo_height() or dh) // 2
+                    canvas.create_image(cx, cy, image=photo, anchor="center")
                     canvas.image = photo
                     try:
-                        status.config(text=f"Connected -- {addr}:{port}", foreground=GREEN)
+                        status.config(text=f"Connected -- {addr}:{port} ({dw}x{dh})", foreground=GREEN)
                     except Exception:
                         return
                 except Exception as e:
@@ -2477,6 +2655,7 @@ class GrowGUI:
         try:
             os.remove(path)
             self._tl_remove_path_from_indexes(path)
+            self._tl_delete_on_pi(path)
             all_paths = self._tl_get_selected_paths()
             if not all_paths:
                 all_paths = [p for ps in self._tl_dates.values() for p in ps]
@@ -2491,6 +2670,28 @@ class GrowGUI:
                 self._refresh_timelapse_dates()
         except Exception as e:
             messagebox.showerror("Delete Failed", str(e))
+
+    def _tl_pi_path_for(self, path):
+        base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+        if os.path.abspath(path).startswith(os.path.abspath(base) + os.sep):
+            rel = os.path.relpath(os.path.abspath(path), os.path.abspath(base))
+            return f"~/plant-monitor/data/photos/timelapse/{rel}"
+        return None
+
+    def _tl_delete_on_pi(self, path):
+        pi_path = self._tl_pi_path_for(path)
+        if not pi_path:
+            return
+        def do_delete():
+            try:
+                subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                     "hawkewing@raspberrypi.local", f"rm -f {pi_path}"],
+                    capture_output=True, timeout=10,
+                )
+            except Exception:
+                pass
+        threading.Thread(target=do_delete, daemon=True).start()
 
     def _tl_remove_path_from_indexes(self, path):
         self._tl_thumb_cache.pop(path, None)
