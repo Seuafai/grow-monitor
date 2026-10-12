@@ -33,7 +33,57 @@ from PIL import Image, ImageTk
 
 csv.field_size_limit(sys.maxsize)
 
+
+def _is_transient_ai_error(e):
+    """True for retryable conditions: 503/high demand, 429 rate limit, timeouts."""
+    s = str(e)
+    low = s.lower()
+    return ("503" in s or "UNAVAILABLE" in s or "high demand" in low
+            or "429" in s or "RESOURCE_EXHAUSTED" in s or "overloaded" in low
+            or "timeout" in low or "timed out" in low or "deadline" in low)
+
+
+def _send_with_retry(chat, parts, attempts=3, delay=6):
+    """Send a chat message, retrying transient API failures with backoff."""
+    last = None
+    for i in range(attempts):
+        try:
+            return chat.send_message(
+                parts,
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+        except Exception as e:
+            last = e
+            if not _is_transient_ai_error(e) or i == attempts - 1:
+                raise
+            time.sleep(delay * (i + 1))
+    raise last
+
+
+def _friendly_ai_error(e):
+    """Turn raw Gemini API errors into something actionable."""
+    s = str(e)
+    if "RESOURCE_EXHAUSTED" in s or "429" in s or "quota" in s.lower():
+        if "PerDay" in s or "per day" in s.lower() or "quotaValue" in s:
+            return ("Daily AI quota reached for this model (20 requests/day on the free tier).\n\n"
+                    "Pick a different model from the Model dropdown to get a fresh quota, "
+                    "or wait for the daily reset.")
+        return ("AI rate limit hit (too many requests in a short period).\n\n"
+                "Wait about a minute and try again, or pick another model.")
+    if "high demand" in s.lower() or "overloaded" in s.lower():
+        return ("The model is busy right now (high demand).\n\n"
+                "Try again shortly, or pick another model from the Model dropdown.")
+    if "no longer available" in s.lower():
+        return ("That model is no longer available for this API key.\n\n"
+                "Pick a different model from the Model dropdown.")
+    return f"Error: {s}"
+
 DEFAULT_HISTORY = os.path.expanduser("~/plant-monitor/data/history.json")
+
+# Photos are downscaled before upload: keeps quality for visual analysis while
+# cutting payload ~5x and input tokens ~3.5x (images are tokenized by area).
+AI_IMAGE_MAX_PX = 1024
+AI_IMAGE_QUALITY = 85
 
 SCHEMA_HINT = json.dumps(
     {
@@ -82,6 +132,31 @@ DWC_OPTIMAL_RANGES = {
     "ec": {"min": 0.8, "max": 2.5, "unit": "mS/cm", "label": "EC"},
     "ph": {"min": 5.5, "max": 6.5, "unit": "", "label": "pH"},
 }
+
+_PARSE_CSV_CACHE = {}
+
+
+def parse_csv_cached(path):
+    """parse_csv() memoised on (path, mtime, size).
+
+    Parsing a multi-MB export takes >1s, and the grow view asks for the same
+    file once per entry, so without this a single grow selection re-parsed it
+    dozens of times. Cache is invalidated when the file changes on disk.
+    """
+    try:
+        st = os.stat(path)
+        key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return parse_csv(path)
+    hit = _PARSE_CSV_CACHE.get(key)
+    if hit is None:
+        hit = parse_csv(path)
+        _PARSE_CSV_CACHE[key] = hit
+        if len(_PARSE_CSV_CACHE) > 8:
+            for k in list(_PARSE_CSV_CACHE)[:-4]:
+                _PARSE_CSV_CACHE.pop(k, None)
+    return hit
+
 
 def parse_csv(path):
     stats = {}
@@ -959,8 +1034,9 @@ class GrowGUI:
         model_row.pack(fill="x", **pad)
         ttk.Label(model_row, text="Model:", font=("Segoe UI", 9, "bold")).pack(side="left")
         form.model_var = tk.StringVar(value="gemini-3.6-flash")
-        ttk.Combobox(model_row, textvariable=form.model_var, width=20, state="readonly",
-            values=["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro"]).pack(side="left", padx=(4, 12))
+        ttk.Combobox(model_row, textvariable=form.model_var, width=24, state="readonly",
+            values=["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-flash-lite",
+                    "gemini-3.5-flash", "gemini-flash-latest"]).pack(side="left", padx=(4, 12))
 
         # -- Photos --
         ttk.Label(form, text="Photos", style="Header.TLabel").pack(anchor="w", **pad)
@@ -1220,7 +1296,17 @@ class GrowGUI:
                 images = []
                 for p in form.image_paths:
                     with open(p, "rb") as f:
-                        images.append(types.Part.from_bytes(data=f.read(), mime_type="image/jpeg"))
+                        raw = f.read()
+                    try:
+                        im = Image.open(io.BytesIO(raw))
+                        im = im.convert("RGB")
+                        im.thumbnail((AI_IMAGE_MAX_PX, AI_IMAGE_MAX_PX), Image.LANCZOS)
+                        buf = io.BytesIO()
+                        im.save(buf, "JPEG", quality=AI_IMAGE_QUALITY)
+                        raw = buf.getvalue()
+                    except Exception:
+                        pass
+                    images.append(types.Part.from_bytes(data=raw, mime_type="image/jpeg"))
 
                 history = load_history(DEFAULT_HISTORY)
                 hist_text = build_history_text(history)
@@ -1284,10 +1370,8 @@ class GrowGUI:
                     prompt_parts.append(f"\nGrower note: {note}")
 
                 chat = client.chats.create(model=model_name)
-                response = chat.send_message(
-                    [types.Part.from_text(text="\n".join(prompt_parts))] + images,
-                    config=types.GenerateContentConfig(temperature=0.2),
-                )
+                response = _send_with_retry(chat, [
+                    types.Part.from_text(text="\n".join(prompt_parts))] + images)
                 raw_text = response.text
                 try:
                     clean = raw_text.strip()
@@ -1341,7 +1425,7 @@ class GrowGUI:
                 self.root.after(0, lambda: set_results(report))
                 self.root.after(0, lambda: self._on_analysis_done())
             except Exception as e:
-                self.root.after(0, lambda: set_results(f"Error: {e}"))
+                self.root.after(0, lambda: set_results(_friendly_ai_error(e)))
                 self.root.after(0, lambda: analyze_btn.config(state="normal", text="Analyze"))
 
         def _on_analysis_done():
@@ -1367,9 +1451,9 @@ class GrowGUI:
         if self._current_view != "log":
             self._show_log_view()
 
-        # Update the log view detail with this grow's info
+        # _refresh_history() rebuilds the detail pane for the active grow,
+        # so don't render it a second time here.
         self._refresh_history()
-        self._show_grow_detail(grow_info)
 
     def _on_sidebar_tl_select(self, event):
         sel = self.sidebar_tl_list.curselection()
@@ -1467,15 +1551,14 @@ class GrowGUI:
         for idx in entry_indices:
             if idx >= len(entries):
                 continue
-            e = entries[idx]
-            cp = e.get("csv_path")
-            if cp and os.path.isfile(cp):
+            cp = entries[idx].get("csv_path")
+            if cp and cp not in csv_files and os.path.isfile(cp):
                 csv_files.append(cp)
         if csv_files:
             all_vals = {}
             for cp in csv_files:
                 try:
-                    s, _, _ = parse_csv(cp)
+                    s, _, _ = parse_csv_cached(cp)
                 except Exception:
                     continue
                 for col, v in s.items():
@@ -1492,7 +1575,7 @@ class GrowGUI:
                             avgs = [a for a in all_vals[col] if a is not None]
                             if avgs:
                                 overall = round(sum(avgs) / len(avgs), 2)
-                                header += f"  {col:<14} avg={overall:>7}  ({len(avgs)} entries)\n"
+                                header += f"  {col:<14} avg={overall:>7}  ({len(avgs)} file{'s' if len(avgs) != 1 else ''})\n"
                             shown.add(col)
                             break
                 for col in all_vals:
@@ -1500,7 +1583,7 @@ class GrowGUI:
                         avgs = [a for a in all_vals[col] if a is not None]
                         if avgs:
                             overall = round(sum(avgs) / len(avgs), 2)
-                            header += f"  {col:<14} avg={overall:>7}  ({len(avgs)} entries)\n"
+                            header += f"  {col:<14} avg={overall:>7}  ({len(avgs)} file{'s' if len(avgs) != 1 else ''})\n"
         self.hist_detail.insert("1.0", header)
         self.hist_detail.config(state="disabled")
 
@@ -2403,10 +2486,8 @@ class GrowGUI:
 
     def _refresh_timelapse_dates(self):
         if hasattr(self, "tl_date_list"):
+            self._tl_active_date = None
             self.tl_date_list.delete(0, "end")
-            total = sum(len(v) for v in self._tl_dates.values())
-            if self._tl_dates:
-                self.tl_date_list.insert("end", f"All  ({total})")
             for date_str in sorted(self._tl_dates.keys(), reverse=True):
                 count = len(self._tl_dates[date_str])
                 self.tl_date_list.insert("end", f"{date_str}  ({count})")
@@ -2415,16 +2496,27 @@ class GrowGUI:
         sel = self.tl_date_list.curselection()
         if not sel:
             return
+        date_str = self.tl_date_list.get(sel[0]).split("  ")[0]
+        if getattr(self, "_tl_active_date", None) == date_str:
+            self.tl_date_list.selection_clear(0, "end")
+            self._tl_active_date = None
+            self._tl_clear_photos()
+            return
+        self._tl_active_date = date_str
         all_paths = []
         for s in sel:
-            text = self.tl_date_list.get(s)
-            if text.startswith("All"):
-                for paths in self._tl_dates.values():
-                    all_paths.extend(paths)
-                break
-            date_str = text.split("  ")[0]
-            all_paths.extend(self._tl_dates.get(date_str, []))
+            d = self.tl_date_list.get(s).split("  ")[0]
+            all_paths.extend(self._tl_dates.get(d, []))
         self._tl_show_photos(all_paths)
+
+    def _tl_clear_photos(self):
+        for item in self._tl_photo_items:
+            item.destroy()
+        self._tl_photo_items.clear()
+        self._tl_photos.clear()
+        if getattr(self, "_tl_generation_token", None) is not None:
+            self._tl_generation_token = object()
+        self._tl_update_scroll()
 
     def _tl_show_photos(self, paths):
         for item in self._tl_photo_items:
@@ -2628,12 +2720,7 @@ class GrowGUI:
             return []
         all_paths = []
         for s in sel:
-            text = self.tl_date_list.get(s)
-            if text.startswith("All"):
-                for paths in self._tl_dates.values():
-                    all_paths.extend(paths)
-                break
-            date_str = text.split("  ")[0]
+            date_str = self.tl_date_list.get(s).split("  ")[0]
             all_paths.extend(self._tl_dates.get(date_str, []))
         return all_paths
 
