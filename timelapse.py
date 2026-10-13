@@ -19,13 +19,16 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 DEFAULT_CONFIG = os.path.expanduser("~/plant-monitor/scripts/timelapse_config.json")
-DEFAULT_DIR = os.path.expanduser("~/plant-monitor/photos/timelapse")
+DEFAULT_DIR = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+
+USB_DEVICE = "/dev/video1"
+USB_CONTROLS = "auto_exposure=1,exposure_time_absolute=5,brightness=30,contrast=5"
 
 running = True
-rpicam_binary = None
 
 
 def handle_signal(sig, frame):
@@ -36,16 +39,6 @@ def handle_signal(sig, frame):
 
 signal.signal(signal.SIGINT, handle_signal)
 signal.signal(signal.SIGTERM, handle_signal)
-
-
-def find_rpicam():
-    global rpicam_binary
-    for name in ("rpicam-still", "libcamera-still"):
-        if shutil.which(name):
-            rpicam_binary = name
-            return
-    print("Error: no camera tool found (rpicam-still or libcamera-still)", file=sys.stderr)
-    sys.exit(1)
 
 
 def load_config(path):
@@ -60,18 +53,42 @@ def load_config(path):
     return cfg
 
 
+def apply_camera_controls():
+    subprocess.run(
+        ["v4l2-ctl", "-d", USB_DEVICE, "-c", USB_CONTROLS],
+        capture_output=True,
+        timeout=5,
+    )
+
+
 def capture_frame(width, height, output_path):
-    cmd = [
-        rpicam_binary,
-        "-o", output_path,
-        "--width", str(width),
-        "--height", str(height),
-        "--nopreview",
-        "--timeout", "5000",
-        "--immediate",
-    ]
-    result = subprocess.run(cmd, capture_output=True, timeout=15)
-    return result.returncode == 0 and os.path.isfile(output_path)
+    # USB cam max 1280x720
+    width = min(width, 1280)
+    height = min(height, 720)
+    apply_camera_controls()
+    with tempfile.TemporaryDirectory() as td:
+        pattern = os.path.join(td, "img%03d.jpg")
+        cmd = [
+            "ffmpeg",
+            "-f", "v4l2",
+            "-input_format", "mjpeg",
+            "-video_size", f"{width}x{height}",
+            "-i", USB_DEVICE,
+            "-frames:v", "5",
+            "-y",
+            pattern,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        if result.returncode != 0:
+            return False
+        last = os.path.join(td, "img005.jpg")
+        if not os.path.isfile(last):
+            frames = sorted(f for f in os.listdir(td) if f.endswith(".jpg"))
+            if not frames:
+                return False
+            last = os.path.join(td, frames[-1])
+        shutil.copyfile(last, output_path)
+    return os.path.isfile(output_path)
 
 
 def is_within_hours(start_str, end_str):
@@ -115,7 +132,6 @@ def main():
     parser.add_argument("--once", action="store_true", help="capture one frame and exit")
     args = parser.parse_args()
 
-    find_rpicam()
     cfg = load_config(args.config)
 
     if args.once:
@@ -125,8 +141,6 @@ def main():
     interval = cfg["interval_minutes"]
     print(f"Timelapse started — interval {interval}min, "
           f"active {cfg['start_time']} to {cfg['end_time']}")
-    print(f"Camera: {rpicam_binary}")
-    print(f"Photos saving to: {cfg['directory']}")
     print("Press Ctrl+C to stop\n")
 
     while running:

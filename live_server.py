@@ -10,7 +10,7 @@ Usage:
 """
 
 import argparse
-import shutil
+import os
 import socketserver
 import subprocess
 import tempfile
@@ -18,6 +18,46 @@ from http.server import BaseHTTPRequestHandler
 
 frame_width = 640
 frame_height = 480
+
+USB_DEVICE = "/dev/video1"
+USB_CONTROLS = "auto_exposure=1,exposure_time_absolute=5,brightness=30,contrast=5"
+
+
+def apply_camera_controls():
+    subprocess.run(
+        ["v4l2-ctl", "-d", USB_DEVICE, "-c", USB_CONTROLS],
+        capture_output=True,
+        timeout=5,
+    )
+
+
+def grab_frame(width, height):
+    width = min(width, 1280)
+    height = min(height, 720)
+    apply_camera_controls()
+    with tempfile.TemporaryDirectory() as td:
+        pattern = os.path.join(td, "img%03d.jpg")
+        cmd = [
+            "ffmpeg",
+            "-f", "v4l2",
+            "-input_format", "mjpeg",
+            "-video_size", f"{width}x{height}",
+            "-i", USB_DEVICE,
+            "-frames:v", "4",
+            "-y",
+            pattern,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        if result.returncode != 0:
+            return None
+        last = os.path.join(td, "img004.jpg")
+        if not os.path.isfile(last):
+            frames = sorted(f for f in os.listdir(td) if f.endswith(".jpg"))
+            if not frames:
+                return None
+            last = os.path.join(td, frames[-1])
+        with open(last, "rb") as f:
+            return f.read()
 
 
 class FrameHandler(BaseHTTPRequestHandler):
@@ -27,29 +67,11 @@ class FrameHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        rpicam = shutil.which("rpicam-still") or shutil.which("libcamera-still")
-        if not rpicam:
+        data = grab_frame(frame_width, frame_height)
+        if data is None:
             self.send_response(503)
             self.end_headers()
             return
-
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
-            cmd = [
-                rpicam,
-                "-o", tmp.name,
-                "--width", str(frame_width),
-                "--height", str(frame_height),
-                "--nopreview",
-                "--timeout", "3000",
-                "--immediate",
-            ]
-            result = subprocess.run(cmd, capture_output=True, timeout=10)
-            if result.returncode != 0:
-                self.send_response(503)
-                self.end_headers()
-                return
-
-            data = tmp.read()
 
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
@@ -73,6 +95,7 @@ def main():
     frame_width = args.width
     frame_height = args.height
 
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", args.port), FrameHandler) as httpd:
         print(f"Live view server on port {args.port}")
         httpd.serve_forever()

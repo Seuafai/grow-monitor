@@ -542,8 +542,7 @@ class GrowGUI:
         tk.Label(live_res_frame, text="Live Camera Res:", bg=SIDEBAR_BG, fg=FG_DIM,
                  font=("Segoe UI", 8)).pack(side="left")
         self.live_res_var = tk.StringVar(value="640x480 (4:3)")
-        self.live_res_options = ["1920x1080 (16:9)", "1280x720 (16:9)",
-                                 "640x480 (4:3)", "1280x960 (4:3)", "800x600 (4:3)"]
+        self.live_res_options = ["1280x720 (16:9)", "800x600 (4:3)", "640x480 (4:3)"]
         tk.ttk.Combobox(live_res_frame, textvariable=self.live_res_var, state="readonly",
                         values=self.live_res_options, width=13).pack(side="right", padx=(4, 0))
 
@@ -644,11 +643,9 @@ class GrowGUI:
         pi_cfg_path = "~/plant-monitor/scripts/timelapse_config.json"
         pi_user_host = "hawkewing@raspberrypi.local"
         RES_OPTIONS = [
-            "1920x1080 (16:9)",
-            "640x480 (4:3)",
-            "1280x960 (4:3)",
+            "1280x720 (16:9)",
             "800x600 (4:3)",
-            "1920x1440 (4:3)",
+            "640x480 (4:3)",
         ]
 
         def read_config():
@@ -1765,18 +1762,19 @@ class GrowGUI:
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", on_close)
 
-        def _current_server_ok():
+        started_size = [None]
+
+        def _server_frame_size():
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "GrowGUI"})
                 with urllib.request.urlopen(req, timeout=4) as resp:
                     b = resp.read()
-                im = Image.open(io.BytesIO(b))
-                return (im.size[0], im.size[1]) == (dw, dh)
+                return Image.open(io.BytesIO(b)).size
             except Exception:
-                return False
+                return None
 
         def start_server():
-            if _current_server_ok():
+            if started_size[0] == (dw, dh) and _server_frame_size() is not None:
                 return
             host = addr
             user = "hawkewing"
@@ -1796,6 +1794,7 @@ class GrowGUI:
                     capture_output=True, timeout=15,
                 )
                 time.sleep(4)
+                started_size[0] = (dw, dh)
             except Exception:
                 pass
 

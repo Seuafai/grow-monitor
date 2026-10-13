@@ -2,7 +2,7 @@
   "interval_minutes": 10,
   "start_time": "18:02",
   "end_time": "12:00",
-  "width": 1920,
-  "height": 1080,
+  "width": 1280,
+  "height": 720,
   "directory": "~/plant-monitor/data/photos/timelapse/Apple_Betty_1"
 }
