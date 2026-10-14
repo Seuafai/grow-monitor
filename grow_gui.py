@@ -478,13 +478,18 @@ class GrowGUI:
         tk.Label(self.sidebar, text=" GROWS", bg=SIDEBAR_BG, fg=FG_DIM,
                  font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", pady=(4, 2))
 
+        grow_list_frame = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
+        grow_list_frame.pack(fill="x", padx=8)
+        grow_list_scroll = ttk.Scrollbar(grow_list_frame, orient="vertical")
         self.sidebar_grow_list = tk.Listbox(
-            self.sidebar, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
+            grow_list_frame, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
             selectforeground="white", font=("Segoe UI", 9), relief="flat",
             activestyle="none", height=8, bd=0, highlightthickness=0,
-            selectborderwidth=0,
+            selectborderwidth=0, yscrollcommand=grow_list_scroll.set,
         )
-        self.sidebar_grow_list.pack(fill="x", padx=8)
+        grow_list_scroll.config(command=self.sidebar_grow_list.yview)
+        grow_list_scroll.pack(side="right", fill="y")
+        self.sidebar_grow_list.pack(side="left", fill="x", expand=True)
         self.sidebar_grow_list.bind("<<ListboxSelect>>", self._on_sidebar_grow_select)
 
         grow_btns = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
@@ -503,13 +508,18 @@ class GrowGUI:
         tk.Label(self.sidebar, text=" TIMELAPSE", bg=SIDEBAR_BG, fg=FG_DIM,
                  font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", pady=(0, 2))
 
+        tl_list_frame = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
+        tl_list_frame.pack(fill="x", padx=8)
+        tl_list_scroll = ttk.Scrollbar(tl_list_frame, orient="vertical")
         self.sidebar_tl_list = tk.Listbox(
-            self.sidebar, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
+            tl_list_frame, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
             selectforeground="white", font=("Segoe UI", 9), relief="flat",
             activestyle="none", height=8, bd=0, highlightthickness=0,
-            selectborderwidth=0,
+            selectborderwidth=0, yscrollcommand=tl_list_scroll.set,
         )
-        self.sidebar_tl_list.pack(fill="x", padx=8)
+        tl_list_scroll.config(command=self.sidebar_tl_list.yview)
+        tl_list_scroll.pack(side="right", fill="y")
+        self.sidebar_tl_list.pack(side="left", fill="x", expand=True)
         self.sidebar_tl_list.bind("<<ListboxSelect>>", self._on_sidebar_tl_select)
 
         tl_btns = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
@@ -537,20 +547,11 @@ class GrowGUI:
         tk.Frame(self.sidebar, bg=BORDER, height=1).pack(fill="x", padx=10, pady=10)
 
         # --- Bottom buttons ---
-        live_res_frame = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
-        live_res_frame.pack(fill="x", padx=8, pady=(0, 2))
-        tk.Label(live_res_frame, text="Live Camera Res:", bg=SIDEBAR_BG, fg=FG_DIM,
-                 font=("Segoe UI", 8)).pack(side="left")
-        self.live_res_var = tk.StringVar(value="640x480 (4:3)")
-        self.live_res_options = ["1280x720 (16:9)", "800x600 (4:3)", "640x480 (4:3)"]
-        tk.ttk.Combobox(live_res_frame, textvariable=self.live_res_var, state="readonly",
-                        values=self.live_res_options, width=13).pack(side="right", padx=(4, 0))
-
         tk.Button(self.sidebar, text="Live View", command=self._open_live_view,
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 9),
                   bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
 
-        tk.Button(self.sidebar, text="Phone App", command=self._launch_web_app,
+        tk.Button(self.sidebar, text="Phone Live View", command=self._launch_web_app,
                   bg="#1a3a5f", fg=FG, font=("Segoe UI", 9),
                   bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
 
@@ -906,12 +907,15 @@ class GrowGUI:
 
         left = ttk.Frame(split)
         left.pack(side="left", fill="y", padx=(0, 8))
+        tl_date_scroll = ttk.Scrollbar(left, orient="vertical")
         self.tl_date_list = tk.Listbox(
             left, width=16, bg=BG_INPUT, fg=FG, selectbackground="#1f3a5f",
             selectforeground="white", font=("Consolas", 9), relief="flat", activestyle="none",
-            selectmode="extended",
+            selectmode="extended", yscrollcommand=tl_date_scroll.set,
         )
-        self.tl_date_list.pack(fill="both", expand=True)
+        tl_date_scroll.config(command=self.tl_date_list.yview)
+        tl_date_scroll.pack(side="right", fill="y")
+        self.tl_date_list.pack(side="left", fill="both", expand=True)
         self.tl_date_list.bind("<<ListboxSelect>>", self._tl_on_date_select)
 
         right = ttk.Frame(split)
@@ -1728,8 +1732,8 @@ class GrowGUI:
         except Exception:
             messagebox.showerror("Error", "Web app failed to start. Check terminal for errors.")
             return
-        messagebox.showinfo("Phone App",
-                            f"Web app running!\n\n"
+        messagebox.showinfo("Phone Live View",
+                            f"Live view running!\n\n"
                             f"Phone:  http://{local_ip}:{port}\n"
                             f"Local:  http://localhost:{port}\n\n"
                             f"Open this on your phone (same WiFi).")
@@ -1741,21 +1745,42 @@ class GrowGUI:
         if not addr:
             messagebox.showwarning("Missing", "Enter the Pi's address.")
             return
-        try:
-            res_val = self.live_res_var.get().split(" (")[0].strip()
-            dw, dh = (int(x) for x in res_val.split("x"))
-        except Exception:
-            dw, dh = 640, 480
+        dw, dh = 1280, 720  # USB webcam max; the server clamps to this
         win = tk.Toplevel(self.root)
-        win.title(f"Live View -- {dw}x{dh}")
-        win.geometry("680x560")
+        win.title("Live View")
         win.configure(bg=BG)
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        win_w = min(dw, int(sw * 0.9))
+        win_h = min(dh + 34, int(sh * 0.9))
+        win.geometry(f"{win_w}x{win_h}+{max(0, (sw - win_w) // 2)}+{max(0, (sh - win_h) // 2)}")
         canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
         canvas.pack(expand=True, fill="both")
-        status = ttk.Label(win, text=f"Starting server on Pi ({dw}x{dh})...", style="Sub.TLabel")
+        status = ttk.Label(win, text="Starting server on Pi...", style="Sub.TLabel")
         status.pack(side="bottom", fill="x", padx=10, pady=6)
         url = f"http://{addr}:{port}/frame"
         running = [True]
+        state = {"img": None}
+        photo_ref = [None]
+
+        def render():
+            img = state["img"]
+            if img is None:
+                return
+            cw = canvas.winfo_width()
+            ch = canvas.winfo_height()
+            if cw < 2 or ch < 2:
+                return
+            scale = min(cw / img.width, ch / img.height)
+            w = max(1, int(img.width * scale))
+            h = max(1, int(img.height * scale))
+            photo = ImageTk.PhotoImage(img.resize((w, h), Image.BILINEAR))
+            photo_ref[0] = photo
+            canvas.delete("all")
+            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+            canvas.image = photo
+
+        canvas.bind("<Configure>", lambda e: render())
 
         def on_close():
             running[0] = False
@@ -1806,14 +1831,11 @@ class GrowGUI:
                     with urllib.request.urlopen(req, timeout=5) as resp:
                         data = resp.read()
                     img = Image.open(io.BytesIO(data))
-                    photo = ImageTk.PhotoImage(img)
-                    canvas.delete("all")
-                    cx = (canvas.winfo_width() or dw) // 2
-                    cy = (canvas.winfo_height() or dh) // 2
-                    canvas.create_image(cx, cy, image=photo, anchor="center")
-                    canvas.image = photo
+                    img.load()
+                    state["img"] = img
                     try:
-                        status.config(text=f"Connected -- {addr}:{port} ({dw}x{dh})", foreground=GREEN)
+                        win.after(0, render)
+                        status.config(text=f"Connected -- {addr}:{port} ({img.width}x{img.height})", foreground=GREEN)
                     except Exception:
                         return
                 except Exception as e:
@@ -2685,6 +2707,7 @@ class GrowGUI:
         img_lbl._tl_path = path
         lbl = img_lbl
         lbl.bind("<Button-1>", lambda e, p=path, w=lbl: self._tl_toggle_select(p, w))
+        lbl.bind("<Double-Button-1>", lambda e, p=path: self._open_photo_viewer(p))
         lbl.bind("<Button-3>", lambda e, p=path: self._tl_rotate_photo(p))
         ts = os.path.basename(path)
         if len(ts) > 20:
