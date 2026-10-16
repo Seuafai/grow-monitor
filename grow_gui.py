@@ -877,11 +877,6 @@ class GrowGUI:
         self.tl_speed = tk.Entry(sf, font=("Consolas", 9), width=6, bg=BG_INPUT, fg=FG, insertbackground=FG)
         self.tl_speed.insert(0, "500")
         self.tl_speed.pack(side="left", padx=(4, 0))
-        ttk.Label(sf, text="Size:").pack(side="left", padx=(12, 0))
-        self.tl_size_var = tk.StringVar(value="Fullscreen")
-        ttk.Combobox(sf, textvariable=self.tl_size_var, state="readonly", width=14,
-                      values=["Fullscreen", "1920x1080", "1280x720", "800x600"],
-                      font=("Consolas", 9)).pack(side="left", padx=(4, 0))
 
         # -- Split: dates list + photo grid --
         split = ttk.Frame(container)
@@ -2911,33 +2906,36 @@ class GrowGUI:
         win = tk.Toplevel(self.root)
         win.title("Timelapse Playback")
         win.configure(bg=BG)
-        size_str = self.tl_size_var.get()
-        if size_str == "Fullscreen":
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            win.geometry(f"{sw}x{sh}+0+0")
-            win.update_idletasks()
-            win.attributes("-fullscreen", True)
-        else:
-            w, h = size_str.split("x")
-            sw, sh = int(w), int(h)
-            x = (self.root.winfo_screenwidth() - sw) // 2
-            y = (self.root.winfo_screenheight() - sh) // 2
-            win.geometry(f"{sw}x{sh}+{x}+{y}")
+
+        # Open at the first photo's native resolution, clamped to 90% of the screen.
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        pw = ph = 0
+        try:
+            with Image.open(self.tl_slideshow_paths[0]) as probe:
+                pw, ph = probe.size
+        except Exception:
+            pass
+        ww = min(pw or int(sw * 0.9), int(sw * 0.9))
+        wh = min(ph or int(sh * 0.9), int(sh * 0.9))
+        win.geometry(f"{ww}x{wh}+{max(0, (sw - ww) // 2)}+{max(0, (sh - wh) // 2)}")
         win.resizable(True, True)
 
         running = [True]
         photo_ref = [None]
         idx = [0]
         after_id = [None]
+        cur_img = [None]
+        pending = [None]
 
         def on_close():
             running[0] = False
-            if after_id[0]:
-                try:
-                    win.after_cancel(after_id[0])
-                except Exception:
-                    pass
+            for aid in (after_id[0], pending[0]):
+                if aid:
+                    try:
+                        win.after_cancel(aid)
+                    except Exception:
+                        pass
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", on_close)
@@ -2959,6 +2957,27 @@ class GrowGUI:
 
         win.bind("<space>", lambda e: toggle_pause())
 
+        def draw():
+            img = cur_img[0]
+            if img is None:
+                return
+            cw, ch = canvas.winfo_width(), canvas.winfo_height()
+            if cw < 2 or ch < 2:
+                return
+            scale = min(cw / img.width, ch / img.height)
+            w = max(1, int(img.width * scale))
+            h = max(1, int(img.height * scale))
+            photo = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
+            photo_ref[0] = photo
+            canvas.delete("all")
+            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+
+        def schedule(e=None):
+            if pending[0] is not None:
+                win.after_cancel(pending[0])
+            pending[0] = win.after(60, draw)
+        canvas.bind("<Configure>", schedule)
+
         def tick():
             if not running[0]:
                 return
@@ -2969,20 +2988,9 @@ class GrowGUI:
                 idx[0] = 0
             path = self.tl_slideshow_paths[idx[0]]
             try:
-                cw = canvas.winfo_width()
-                ch = canvas.winfo_height()
-                if cw < 100:
-                    cw, ch = sw, sh - 40
-                img = Image.open(path)
-                iw, ih = img.size
-                scale = min(cw / iw, ch / ih)
-                new_w = int(iw * scale)
-                new_h = int(ih * scale)
-                img = img.resize((new_w, new_h), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                photo_ref[0] = photo
-                canvas.delete("all")
-                canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+                cur_img[0] = Image.open(path)
+                cur_img[0].load()
+                draw()
                 fname = os.path.basename(path)
                 info_lbl.config(text=f"{idx[0] + 1}/{len(self.tl_slideshow_paths)}  {fname}")
             except Exception as e:
