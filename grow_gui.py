@@ -643,11 +643,6 @@ class GrowGUI:
     def _tl_settings(self):
         pi_cfg_path = "~/plant-monitor/scripts/timelapse_config.json"
         pi_user_host = "hawkewing@raspberrypi.local"
-        RES_OPTIONS = [
-            "1280x720 (16:9)",
-            "800x600 (4:3)",
-            "640x480 (4:3)",
-        ]
 
         def read_config():
             try:
@@ -703,15 +698,6 @@ class GrowGUI:
         var_end = tk.StringVar(value=str(cfg.get("end_time", "22:00")))
         tk.Entry(r_end, textvariable=var_end, width=8).pack(side="left")
 
-        r_res = row("Resolution:")
-        w = cfg.get("width", 1920); h = cfg.get("height", 1080)
-        cur = f"{w}x{h}" + (" (16:9)" if h and h * 16 == w * 9 else " (4:3)")
-        if cur not in RES_OPTIONS:
-            RES_OPTIONS = [cur] + RES_OPTIONS
-        var_res = tk.StringVar(value=cur)
-        tk.ttk.Combobox(r_res, textvariable=var_res, state="readonly",
-                        values=RES_OPTIONS, width=16).pack(side="left")
-
         tk.Label(body, text="Start/end use HH:MM 24h format. Photos only taken",
                  bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 7)).pack(anchor="w", pady=(8, 0))
         tk.Label(body, text="during light hours between those times.",
@@ -733,11 +719,7 @@ class GrowGUI:
             except ValueError:
                 messagebox.showerror("Invalid", "Start and End time must be HH:MM (24-hour).", parent=win)
                 return
-            res = var_res.get().split(" (")[0].strip()
-            try:
-                w, h = (int(x) for x in res.split("x"))
-            except ValueError:
-                w, h = 1920, 1080
+            w, h = 1280, 720
 
             new_cfg = dict(cfg)
             new_cfg["interval_minutes"] = minutes
@@ -1005,6 +987,16 @@ class GrowGUI:
         form.date_observed.pack(side="left", padx=(4, 0))
         form.date_observed.insert(0, datetime.now().strftime("%Y-%m-%d"))
 
+        # -- Flower flip date (18/6 -> 12/12); tells the AI the growth stage --
+        info2 = ttk.Frame(form)
+        info2.pack(fill="x", **pad)
+        ttk.Label(info2, text="Flipped to 12/12:", font=("Segoe UI", 9, "bold")).pack(side="left")
+        form.date_flipped = tk.Entry(info2, font=("Consolas", 9), width=10, bg=BG_INPUT, fg=FG, insertbackground=FG)
+        form.date_flipped.pack(side="left", padx=(4, 12))
+        form.date_flipped.insert(0, "YYYY-MM-DD")
+        ttk.Label(info2, text="(light flip date — lets the AI tell veg from flower)",
+                  style="Sub.TLabel").pack(side="left")
+
         # -- Pre-fill from last entry of this grow --
         entries = load_history(DEFAULT_HISTORY).get("analyses", [])
         light_on = light_off = dli = notes = ph = ec = litres = ""
@@ -1019,6 +1011,9 @@ class GrowGUI:
                     if e.get("date_popped"):
                         form.date_popped.delete(0, "end")
                         form.date_popped.insert(0, e["date_popped"])
+                    if e.get("date_flipped"):
+                        form.date_flipped.delete(0, "end")
+                        form.date_flipped.insert(0, e["date_flipped"])
                     lighting = e.get("lighting", {})
                     nutrient = e.get("nutrients", {})
                     notes = e.get("note", "")
@@ -1050,6 +1045,32 @@ class GrowGUI:
                 form.image_types.extend([form.photo_type_var.get()] * len(paths))
                 refresh_thumbs()
         ttk.Button(pf, text="Add Photos...", command=browse_photos).pack(side="left")
+
+        def browse_timelapse_photos():
+            base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
+            initial = base
+            plant = (form.plant_var.get() or "").strip()
+            if plant:
+                num = (form.grow_num_var.get() or "").strip()
+                cand = os.path.join(base, f"{plant}_{num}".replace(" ", "_"))
+                if os.path.isdir(cand):
+                    initial = cand
+            obs = (form.date_observed.get() or "").strip()
+            if obs and obs != "YYYY-MM-DD":
+                cand = os.path.join(initial, obs)
+                if os.path.isdir(cand):
+                    initial = cand
+            paths = filedialog.askopenfilenames(
+                title="Pick timelapse photo(s)",
+                initialdir=initial,
+                filetypes=[("Images", "*.jpg *.jpeg *.png")],
+            )
+            if paths:
+                form.image_paths.extend(paths)
+                form.image_types.extend([form.photo_type_var.get()] * len(paths))
+                refresh_thumbs()
+        ttk.Button(pf, text="From Timelapse...", command=browse_timelapse_photos).pack(side="left", padx=(4, 0))
+
         def clear_photos():
             form.image_paths.clear()
             form.image_types.clear()
@@ -1293,6 +1314,7 @@ class GrowGUI:
                 date_planted = form.date_planted.get().strip()
                 date_popped = form.date_popped.get().strip()
                 observation_date = form.date_observed.get().strip()
+                date_flipped = form.date_flipped.get().strip()
 
                 images = []
                 for p in form.image_paths:
@@ -1337,15 +1359,35 @@ class GrowGUI:
 
                 prompt_parts = [DWC_CONTEXT]
                 prompt_parts.append(f"\nPlant: {plant}")
+                days_age = None
                 if date_popped and date_popped != "YYYY-MM-DD":
                     try:
                         ref = datetime.strptime(observation_date, "%Y-%m-%d") if observation_date else datetime.now()
-                        days = (ref - datetime.strptime(date_popped, "%Y-%m-%d")).days
-                        prompt_parts.append(f"Age: {days} days ({days // 7} weeks) as of {observation_date}")
+                        days_age = (ref - datetime.strptime(date_popped, "%Y-%m-%d")).days
+                        prompt_parts.append(f"Age: {days_age} days ({days_age // 7} weeks) as of {observation_date}")
                     except ValueError:
                         pass
                 if date_planted and date_planted != "YYYY-MM-DD":
                     prompt_parts.append(f"Planted: {date_planted}")
+                if date_flipped and date_flipped != "YYYY-MM-DD":
+                    try:
+                        ref = datetime.strptime(observation_date, "%Y-%m-%d") if observation_date else datetime.now()
+                        days_flip = (ref - datetime.strptime(date_flipped, "%Y-%m-%d")).days
+                        prompt_parts.append(f"Flipped to 12/12 flowering: {date_flipped}")
+                        if days_flip < 0:
+                            prompt_parts.append("Growth stage: still VEGETATIVE (flip date is in the future).")
+                        elif days_flip == 0:
+                            prompt_parts.append("Growth stage: FLOWERING starts today (flipped today).")
+                        else:
+                            stage = (f"Growth stage: FLOWERING, {days_flip} days since flip "
+                                     f"({days_flip // 7} weeks)")
+                            if days_age is not None:
+                                stage += f"; approx {max(0, days_age - days_flip)} days in veg before flip"
+                            prompt_parts.append(stage + ".")
+                    except ValueError:
+                        pass
+                elif days_age is not None:
+                    prompt_parts.append("Growth stage: unknown (no flip date) — infer veg vs flower from the photos.")
                 if form.image_paths:
                     prompt_parts.append("\nAnalyze the plant health from the provided photos.")
                 else:
@@ -1408,6 +1450,7 @@ class GrowGUI:
                     "plant": plant,
                     "date_planted": date_planted if date_planted != "YYYY-MM-DD" else "",
                     "date_popped": date_popped if date_popped != "YYYY-MM-DD" else "",
+                    "date_flipped": date_flipped if date_flipped != "YYYY-MM-DD" else "",
                     "photo_paths": [os.path.basename(p) for p in form.image_paths],
                     "photo_full_paths": list(form.image_paths),
                     "photo_types": list(form.image_types),
@@ -1895,6 +1938,17 @@ class GrowGUI:
                 lines.append(f"Age:      {days} days ({days // 7} weeks)")
             except Exception:
                 lines.append(f"Popped:   {popped}")
+        flipped = entry.get("date_flipped")
+        if flipped:
+            try:
+                ref_date = datetime.strptime(obs, "%Y-%m-%d") if obs else datetime.now()
+                days_flip = (ref_date - datetime.strptime(flipped, "%Y-%m-%d")).days
+                if days_flip > 0:
+                    lines.append(f"Flower:   {days_flip} days since flip")
+                else:
+                    lines.append(f"Flip:     {flipped}")
+            except Exception:
+                lines.append(f"Flip:     {flipped}")
 
         csv_path = entry.get("csv_path")
         metrics = None
@@ -2136,63 +2190,61 @@ class GrowGUI:
     def _open_photo_viewer(self, path):
         if not os.path.isfile(path):
             return
+        try:
+            img = Image.open(path)
+            img.load()
+        except Exception:
+            return
         win = tk.Toplevel(self.root)
-        win.title(os.path.basename(path))
+        win.title(f"{os.path.basename(path)}  ({img.width}x{img.height})")
         win.configure(bg=BG)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        ww, wh = min(900, sw - 100), min(700, sh - 100)
-        win.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{(sh - wh) // 2}")
-
-        img = Image.open(path)
-        state = {"img": img, "zoom": 1.0}
+        max_w, max_h = int(sw * 0.9), int(sh * 0.9)
+        ww, wh = min(img.width, max_w), min(img.height, max_h) + 30
+        win.geometry(f"{ww}x{wh}+{max(0, (sw - ww) // 2)}+{max(0, (sh - wh) // 2)}")
 
         canvas = tk.Canvas(win, bg="#1a1a1a", highlightthickness=0)
         canvas.pack(fill="both", expand=True)
-
         photo_ref = [None]
+        pending = [None]
 
         def render():
-            w = max(1, int(img.width * state["zoom"]))
-            h = max(1, int(img.height * state["zoom"]))
-            resized = img.resize((w, h), Image.LANCZOS) if state["zoom"] != 1.0 else img.copy()
+            cw, ch = canvas.winfo_width(), canvas.winfo_height()
+            if cw < 2 or ch < 2:
+                return
+            scale = min(cw / img.width, ch / img.height)
+            w = max(1, int(img.width * scale))
+            h = max(1, int(img.height * scale))
+            resized = img.resize((w, h), Image.LANCZOS) if (w, h) != img.size else img.copy()
             photo = ImageTk.PhotoImage(resized)
             photo_ref[0] = photo
             canvas.delete("all")
-            cw = canvas.winfo_width() or ww
-            ch = canvas.winfo_height() or wh
-            cx = max(0, (cw - w) // 2)
-            cy = max(0, (ch - h) // 2)
-            canvas.create_image(cx, cy, image=photo, anchor="nw")
+            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
 
-        def zoom_in(e=None):
-            state["zoom"] = min(state["zoom"] * 1.25, 10.0)
-            render()
+        def schedule(e=None):
+            if pending[0] is not None:
+                win.after_cancel(pending[0])
+            pending[0] = win.after(60, render)
 
-        def zoom_out(e=None):
-            state["zoom"] = max(state["zoom"] / 1.25, 0.1)
-            render()
+        def actual_size(e=None):
+            win.geometry(f"{min(img.width, max_w)}x{min(img.height, max_h) + 30}")
 
-        def zoom_reset(e=None):
-            state["zoom"] = 1.0
-            render()
+        def fit_screen(e=None):
+            w, h = max_w, max_h + 30
+            win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
 
-        win.bind("+", zoom_in)
-        win.bind("=", zoom_in)
-        win.bind("-", zoom_out)
-        win.bind("0", zoom_reset)
-        win.bind("<MouseWheel>", lambda e: zoom_in() if e.delta > 0 else zoom_out())
-        win.bind("<Button-4>", zoom_in)
-        win.bind("<Button-5>", zoom_out)
+        canvas.bind("<Configure>", schedule)
+        win.bind("0", actual_size)
+        win.bind("f", fit_screen)
 
         btns = ttk.Frame(win)
         btns.pack(side="bottom", fill="x")
-        ttk.Button(btns, text="+", command=zoom_in, width=3).pack(side="left", padx=2, pady=4)
-        ttk.Button(btns, text="-", command=zoom_out, width=3).pack(side="left", padx=2, pady=4)
-        ttk.Button(btns, text="1:1", command=zoom_reset, width=5).pack(side="left", padx=2, pady=4)
-        ttk.Label(btns, text="Scroll or +/- to zoom", style="Sub.TLabel").pack(side="left", padx=8)
+        ttk.Button(btns, text="1:1", command=actual_size, width=5).pack(side="left", padx=2, pady=4)
+        ttk.Button(btns, text="Fit", command=fit_screen, width=5).pack(side="left", padx=2, pady=4)
+        ttk.Label(btns, text="Resize the window to scale", style="Sub.TLabel").pack(side="left", padx=8)
 
-        win.after(50, render)
+        win.after(60, render)
 
     def _delete_history_entry(self):
         sel = self.hist_entry_tree.selection()
