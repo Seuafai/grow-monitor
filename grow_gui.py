@@ -941,7 +941,6 @@ class GrowGUI:
         pad = {"padx": 6, "pady": 3}
 
         form.image_paths = []
-        form.image_types = []
         form.csv_path = None
         form.csv_stats = None
         form.csv_fieldnames = None
@@ -1037,7 +1036,6 @@ class GrowGUI:
             paths = filedialog.askopenfilenames(filetypes=[("Images", "*.jpg *.jpeg *.png *.webp")])
             if paths:
                 form.image_paths.extend(paths)
-                form.image_types.extend([form.photo_type_var.get()] * len(paths))
                 refresh_thumbs()
         ttk.Button(pf, text="Add Photos...", command=browse_photos).pack(side="left")
 
@@ -1062,22 +1060,16 @@ class GrowGUI:
             )
             if paths:
                 form.image_paths.extend(paths)
-                form.image_types.extend([form.photo_type_var.get()] * len(paths))
                 refresh_thumbs()
         ttk.Button(pf, text="From Timelapse...", command=browse_timelapse_photos).pack(side="left", padx=(4, 0))
 
         def clear_photos():
             form.image_paths.clear()
-            form.image_types.clear()
             refresh_thumbs()
             form.photo_label.config(text="No photos selected")
         ttk.Button(pf, text="Clear", command=clear_photos).pack(side="left", padx=(4, 0))
         form.photo_label = ttk.Label(pf, text="No photos selected", style="Sub.TLabel")
         form.photo_label.pack(side="left", padx=(8, 0))
-        ttk.Label(pf, text="Type:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(12, 0))
-        form.photo_type_var = tk.StringVar(value="plant")
-        ttk.Combobox(pf, textvariable=form.photo_type_var, width=10, state="readonly",
-            values=["plant", "pH", "EC", "nutrients", "other"]).pack(side="left", padx=(4, 0))
 
         thumb_outer = ttk.Frame(form)
         thumb_outer.pack(fill="x", **pad)
@@ -1448,7 +1440,6 @@ class GrowGUI:
                     "date_flipped": date_flipped if date_flipped != "YYYY-MM-DD" else "",
                     "photo_paths": [os.path.basename(p) for p in form.image_paths],
                     "photo_full_paths": list(form.image_paths),
-                    "photo_types": list(form.image_types),
                     "csv_path": form.csv_path,
                     "csv_metrics": {k: {kk: vv for kk, vv in v.items() if kk != "values"} for k, v in (csv_metrics or {}).items()},
                     "lighting": lighting,
@@ -1739,41 +1730,41 @@ class GrowGUI:
 
     # ----------------------------------------------------------- Live View
     def _launch_web_app(self):
-        import socket
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_app.py")
-        if not os.path.isfile(script):
-            messagebox.showerror("Error", f"web_app.py not found at {script}")
-            return
-        subprocess.run(["fuser", "-k", "5000/tcp"], capture_output=True)
-        self._web_app_proc = subprocess.Popen([sys.executable, script],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        hostname = socket.gethostname()
-        try:
-            local_ip = socket.gethostbyname(hostname)
-        except Exception:
-            local_ip = "localhost"
-        self.root.after(2000, lambda: self._show_web_app_url(local_ip))
-
-    def _show_web_app_url(self, local_ip):
-        import socket as _s
+        host = "raspberrypi.local"
+        user = "hawkewing"
         port = 5000
-        port_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".web_port")
         try:
-            with open(port_file) as f:
-                port = int(f.read().strip())
-        except Exception:
-            pass
-        # Check if server is actually running
+            subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                 f"{user}@{host}", "pkill -f '[w]eb_app.py' 2>/dev/null"],
+                capture_output=True, timeout=10,
+            )
+            time.sleep(1)
+            subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                 f"{user}@{host}",
+                 "cd ~/plant-monitor && nohup python3 web_app.py "
+                 "</dev/null >/dev/null 2>&1 & disown"],
+                capture_output=True, timeout=15,
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not start phone view on the Pi:\n{e}")
+            return
+        self.root.after(4000, lambda: self._show_web_app_url(host, port))
+
+    def _show_web_app_url(self, host, port):
+        import socket as _s
         try:
-            with _s.create_connection(("localhost", port), timeout=2):
+            with _s.create_connection((host, port), timeout=4):
                 pass
         except Exception:
-            messagebox.showerror("Error", "Web app failed to start. Check terminal for errors.")
+            messagebox.showerror("Error",
+                                 f"Phone view did not come up on the Pi ({host}:{port}).\n"
+                                 f"Check the Pi is reachable.")
             return
         messagebox.showinfo("Phone Live View",
-                            f"Live view running!\n\n"
-                            f"Phone:  http://{local_ip}:{port}\n"
-                            f"Local:  http://localhost:{port}\n\n"
+                            f"Live view running on the Pi!\n\n"
+                            f"Phone:  http://{host}:{port}\n\n"
                             f"Open this on your phone (same WiFi).")
 
     def _open_live_view(self, addr=None):
@@ -1802,11 +1793,19 @@ class GrowGUI:
         photo_ref = [None]
 
         def render():
+            try:
+                if not win.winfo_exists():
+                    return
+            except Exception:
+                return
             img = state["img"]
             if img is None:
                 return
-            cw = canvas.winfo_width()
-            ch = canvas.winfo_height()
+            try:
+                cw = canvas.winfo_width()
+                ch = canvas.winfo_height()
+            except Exception:
+                return
             if cw < 2 or ch < 2:
                 return
             scale = min(cw / img.width, ch / img.height)
@@ -1814,9 +1813,12 @@ class GrowGUI:
             h = max(1, int(img.height * scale))
             photo = ImageTk.PhotoImage(img.resize((w, h), Image.BILINEAR))
             photo_ref[0] = photo
-            canvas.delete("all")
-            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
-            canvas.image = photo
+            try:
+                canvas.delete("all")
+                canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+                canvas.image = photo
+            except Exception:
+                return
 
         canvas.bind("<Configure>", lambda e: render())
 
@@ -2205,6 +2207,11 @@ class GrowGUI:
         pending = [None]
 
         def render():
+            try:
+                if not win.winfo_exists():
+                    return
+            except Exception:
+                return
             cw, ch = canvas.winfo_width(), canvas.winfo_height()
             if cw < 2 or ch < 2:
                 return
@@ -2214,12 +2221,23 @@ class GrowGUI:
             resized = img.resize((w, h), Image.LANCZOS) if (w, h) != img.size else img.copy()
             photo = ImageTk.PhotoImage(resized)
             photo_ref[0] = photo
-            canvas.delete("all")
-            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+            try:
+                canvas.delete("all")
+                canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+            except Exception:
+                return
 
         def schedule(e=None):
+            try:
+                if not win.winfo_exists():
+                    return
+            except Exception:
+                return
             if pending[0] is not None:
-                win.after_cancel(pending[0])
+                try:
+                    win.after_cancel(pending[0])
+                except Exception:
+                    pass
             pending[0] = win.after(60, render)
 
         def actual_size(e=None):
@@ -2517,6 +2535,8 @@ class GrowGUI:
         return "Unknown"
 
     def _tl_load_folder(self):
+        if not hasattr(self, "tl_folder_var"):
+            return
         folder = self.tl_folder_var.get().strip()
         if not folder or not os.path.isdir(folder):
             return

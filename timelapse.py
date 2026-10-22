@@ -25,7 +25,7 @@ import time
 DEFAULT_CONFIG = os.path.expanduser("~/plant-monitor/scripts/timelapse_config.json")
 DEFAULT_DIR = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
 
-USB_DEVICE = "/dev/video1"
+USB_DEVICE = "/dev/video0"
 USB_CONTROLS = "auto_exposure=1,exposure_time_absolute=5,brightness=30,contrast=5"
 
 running = True

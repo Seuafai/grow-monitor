@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler
 frame_width = 640
 frame_height = 480
 
-USB_DEVICE = "/dev/video1"
+USB_DEVICE = "/dev/video0"
 USB_CONTROLS = "auto_exposure=1,exposure_time_absolute=5,brightness=30,contrast=5"
 
 

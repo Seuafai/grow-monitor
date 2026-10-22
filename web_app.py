@@ -16,7 +16,7 @@ from flask import Flask, Response, render_template
 
 app = Flask(__name__)
 
-PI_HOST = os.environ.get("GROWLAB_PI_HOST", "raspberrypi.local")
+PI_HOST = os.environ.get("GROWLAB_PI_HOST", "127.0.0.1")
 PI_PORT = os.environ.get("GROWLAB_PI_PORT", "5555")
 FRAME_URL = f"http://{PI_HOST}:{PI_PORT}/frame"
 
@@ -52,21 +52,8 @@ if __name__ == "__main__":
     except Exception:
         local_ip = "localhost"
 
-    def find_free_port(start=5000):
-        for p in range(start, start + 100):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.bind(("0.0.0.0", p))
-                    return p
-                except OSError:
-                    continue
-        return start
-
-    port = find_free_port()
-    port_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".web_port")
-    with open(port_file, "w") as f:
-        f.write(str(port))
+    port = int(os.environ.get("GROWLAB_WEB_PORT", "5000"))
     print("\n  GrowLab Live running:")
     print(f"    Phone:  http://{local_ip}:{port}")
     print(f"    Local:  http://localhost:{port}\n")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
