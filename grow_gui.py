@@ -551,10 +551,6 @@ class GrowGUI:
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 9),
                   bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
 
-        tk.Button(self.sidebar, text="Phone Live View", command=self._launch_web_app,
-                  bg="#1a3a5f", fg=FG, font=("Segoe UI", 9),
-                  bd=0, padx=8, pady=4, cursor="hand2", anchor="w").pack(fill="x", padx=8, pady=(0, 4))
-
         # Sidebar refresh button
         tk.Button(self.sidebar, text="Refresh", command=self._refresh_all,
                   bg=BG_CARD, fg=FG_DIM, font=("Segoe UI", 8),
@@ -1729,44 +1725,6 @@ class GrowGUI:
         self._show_entry_form(grow_num=str(max_grow + 1), plant_name="")
 
     # ----------------------------------------------------------- Live View
-    def _launch_web_app(self):
-        host = "raspberrypi.local"
-        user = "hawkewing"
-        port = 5000
-        try:
-            subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                 f"{user}@{host}", "pkill -f '[w]eb_app.py' 2>/dev/null"],
-                capture_output=True, timeout=10,
-            )
-            time.sleep(1)
-            subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                 f"{user}@{host}",
-                 "cd ~/plant-monitor && nohup python3 web_app.py "
-                 "</dev/null >/dev/null 2>&1 & disown"],
-                capture_output=True, timeout=15,
-            )
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not start phone view on the Pi:\n{e}")
-            return
-        self.root.after(4000, lambda: self._show_web_app_url(host, port))
-
-    def _show_web_app_url(self, host, port):
-        import socket as _s
-        try:
-            with _s.create_connection((host, port), timeout=4):
-                pass
-        except Exception:
-            messagebox.showerror("Error",
-                                 f"Phone view did not come up on the Pi ({host}:{port}).\n"
-                                 f"Check the Pi is reachable.")
-            return
-        messagebox.showinfo("Phone Live View",
-                            f"Live view running on the Pi!\n\n"
-                            f"Phone:  http://{host}:{port}\n\n"
-                            f"Open this on your phone (same WiFi).")
-
     def _open_live_view(self, addr=None):
         if addr is None:
             addr = "raspberrypi.local"
