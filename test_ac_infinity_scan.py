@@ -151,6 +151,37 @@ check("cli --help lists --connect", "--connect" in p.stdout)
 p = subprocess.run([sys.executable, script, "--connect"], capture_output=True, text=True)
 check("cli --connect without --address warns",
       "--connect requires --address" in p.stderr, p.stderr)
+check("cli --connect without --address exits 2", p.returncode == 2, p.returncode)
+
+# ---- exit codes, with the scanner stubbed so no hardware is needed ----
+import asyncio
+import contextlib
+
+
+def run_main(argv):
+    old = sys.argv
+    sys.argv = ["ac_infinity_scan.py"] + argv
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return asyncio.run(ac.main())
+    finally:
+        sys.argv = old
+
+
+async def _no_reading(address, duration, once):
+    return False
+
+
+async def _got_reading(address, duration, once):
+    return True
+
+
+original_scan = ac.passive_scan
+ac.passive_scan = _no_reading
+check("--once with no reading exits 1", run_main(["--once"]) == 1)
+ac.passive_scan = _got_reading
+check("--once with reading exits 0", run_main(["--once"]) == 0)
+ac.passive_scan = original_scan
 
 print()
 print("FAILURES:", len(fails), fails if fails else "")

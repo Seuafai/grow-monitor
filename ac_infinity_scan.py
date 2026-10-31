@@ -109,6 +109,7 @@ def emit(reading, address, name, rssi):
 
 async def passive_scan(address, duration, once):
     stop = asyncio.Event()
+    seen = []
 
     def callback(device, advertisement_data):
         if address and device.address.lower() != address.lower():
@@ -117,6 +118,7 @@ async def passive_scan(address, duration, once):
         if reading is None:
             return
         emit(reading, device.address, device.name, advertisement_data.rssi)
+        seen.append(True)
         if once:
             stop.set()
 
@@ -124,11 +126,15 @@ async def passive_scan(address, duration, once):
     await scanner.start()
     try:
         if once:
-            await asyncio.wait_for(stop.wait(), timeout=duration)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=duration)
+            except asyncio.TimeoutError:
+                pass
         else:
             await asyncio.sleep(duration)
     finally:
         await scanner.stop()
+    return bool(seen)
 
 
 async def connected_stream(address, duration):
@@ -157,16 +163,21 @@ async def main():
 
     if args.connect and not args.address:
         print("--connect requires --address", file=sys.stderr)
-        return
+        return 2
 
-    await passive_scan(args.address, args.duration, args.once)
+    found = await passive_scan(args.address, args.duration, args.once)
+
+    if args.once and not found:
+        print(f"no AC Infinity controller seen in {args.duration:g}s", file=sys.stderr)
+        return 1
 
     if args.connect:
         await connected_stream(args.address, args.duration)
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         pass
