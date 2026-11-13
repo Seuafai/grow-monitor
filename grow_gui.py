@@ -18,6 +18,7 @@ import io
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -408,6 +409,8 @@ class GrowGUI:
         style.configure("MetricDim.TLabel", font=("Segoe UI", 8), foreground=FG_DIM)
 
         self.plant_names_file = os.path.expanduser("~/plant-monitor/data/plant_names.json")
+        self.grow_counter_file = os.path.expanduser("~/plant-monitor/data/grow_counter.json")
+        self.timelapse_base = os.path.expanduser("~/plant-monitor/data/photos/timelapse")
         self.hist_photo_images = []
         self._grow_tree_map = {}
         self._entry_tree_map = {}
@@ -497,7 +500,7 @@ class GrowGUI:
         tk.Button(grow_btns, text="+ New Grow", command=self._new_grow_dialog,
                   bg="#238636", fg="white", font=("Segoe UI", 8, "bold"),
                   bd=0, padx=8, pady=3, cursor="hand2").pack(side="left")
-        tk.Button(grow_btns, text="+ Entry", command=self._show_entry_form,
+        tk.Button(grow_btns, text="+ Entry", command=self._add_entry,
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 8),
                   bd=0, padx=8, pady=3, cursor="hand2").pack(side="left", padx=(6, 0))
 
@@ -521,12 +524,16 @@ class GrowGUI:
         tl_list_scroll.pack(side="right", fill="y")
         self.sidebar_tl_list.pack(side="left", fill="x", expand=True)
         self.sidebar_tl_list.bind("<<ListboxSelect>>", self._on_sidebar_tl_select)
+        self.sidebar_tl_list.bind("<Button-3>", self._on_tl_right_click)
 
         tl_btns = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
         tl_btns.pack(fill="x", padx=8, pady=4)
         tk.Button(tl_btns, text="Timelapse", command=self._show_timelapse_view,
                   bg=BG_CARD, fg=FG, font=("Segoe UI", 8),
                   bd=0, padx=8, pady=3, cursor="hand2").pack(side="left")
+        tk.Button(tl_btns, text="Delete", command=self._delete_tl_grow,
+                  bg=BG_CARD, fg=FG, font=("Segoe UI", 8),
+                  bd=0, padx=8, pady=3, cursor="hand2").pack(side="left", padx=(6, 0))
 
         self.tl_status_frame = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
         self.tl_status_frame.pack(fill="x", padx=8, pady=(0, 4))
@@ -564,12 +571,11 @@ class GrowGUI:
 
     def _auto_sync_on_startup(self):
         for i in range(self.sidebar_tl_list.size()):
-            name = self._sidebar_tl_items.get(i)
-            if not name:
+            folder = self._sidebar_tl_items.get(i)
+            if not folder:
                 continue
-            safe_name = name.replace("#", "").replace(" ", "_").strip()
-            local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
-            pi_source = f"~/plant-monitor/data/photos/timelapse/{safe_name}"
+            local_dir = os.path.join(self.timelapse_base, folder)
+            pi_source = f"~/plant-monitor/data/photos/timelapse/{folder}"
             os.makedirs(local_dir, exist_ok=True)
 
             def sync_folder(ld=local_dir, pd=pi_source):
@@ -784,7 +790,7 @@ class GrowGUI:
         top_bar = ttk.Frame(container)
         top_bar.pack(fill="x", **pad)
         ttk.Button(top_bar, text="New Grow", style="Accent.TButton", command=self._new_grow_dialog).pack(side="left")
-        ttk.Button(top_bar, text="Add Entry", command=self._show_entry_form).pack(side="left", padx=(8, 0))
+        ttk.Button(top_bar, text="Add Entry", command=self._add_entry).pack(side="left", padx=(8, 0))
         ttk.Button(top_bar, text="Edit", command=self._edit_history_entry).pack(side="right")
         ttk.Button(top_bar, text="Delete Entry", command=self._delete_history_entry).pack(side="right", padx=(0, 4))
         ttk.Button(top_bar, text="Delete Grow", command=self._delete_grow).pack(side="right", padx=(0, 4))
@@ -863,6 +869,7 @@ class GrowGUI:
         self.tl_folder.pack(side="left", fill="x", expand=True, padx=(4, 0))
         ttk.Button(ff, text="Browse...", command=self._tl_browse_folder).pack(side="left", padx=(4, 0))
         ttk.Button(ff, text="Sync from Pi", command=self._tl_sync_from_pi).pack(side="left", padx=(4, 0))
+        ttk.Button(ff, text="Delete Timeline", command=self._delete_tl_grow).pack(side="left", padx=(4, 0))
 
         # -- Playback controls --
         sf = ttk.Frame(container)
@@ -908,18 +915,16 @@ class GrowGUI:
         self.tl_photos = []
         self.tl_photo_items = []
 
-        self._tl_refresh_grows()
+        self._refresh_sidebar_tl()
         self._refresh_timelapse_dates()
 
         if auto_load and self._sidebar_tl_items:
-            first_name = self._sidebar_tl_items[0]
-            safe_name = first_name.replace("#", "").replace(" ", "_").strip()
-            local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
+            local_dir = os.path.join(self.timelapse_base, self._sidebar_tl_items[0])
             os.makedirs(local_dir, exist_ok=True)
             self.tl_folder_var.set(local_dir)
             self._tl_load_folder()
 
-    def _show_entry_form(self, grow_num=None, plant_name=None):
+    def _show_entry_form(self, grow_num=None, plant_name=None, new_grow=False):
         self._clear_content()
         self._current_view = "entry_form"
         container = self.content_frame
@@ -949,10 +954,13 @@ class GrowGUI:
         hdr = ttk.Frame(form)
         hdr.pack(fill="x", **pad)
         ttk.Button(hdr, text="< Back", command=self._show_log_view).pack(side="left")
-        if grow_num:
-            ttk.Label(hdr, text=f"  New Entry -- #{grow_num}", style="Header.TLabel").pack(side="left", padx=(12, 0))
+        if new_grow:
+            hdr_text = f"  New Grow -- #{grow_num}" if grow_num else "  New Grow"
+        elif grow_num:
+            hdr_text = f"  New Entry -- {plant_name or 'Grow'} #{grow_num}"
         else:
-            ttk.Label(hdr, text="  New Grow", style="Header.TLabel").pack(side="left", padx=(12, 0))
+            hdr_text = "  New Entry"
+        ttk.Label(hdr, text=hdr_text, style="Header.TLabel").pack(side="left", padx=(12, 0))
 
         # -- Plant info --
         info = ttk.Frame(form)
@@ -960,10 +968,21 @@ class GrowGUI:
         ttk.Label(info, text="Plant:", font=("Segoe UI", 9, "bold")).pack(side="left")
         plant_names = self._load_plant_names()
         form.plant_var = tk.StringVar(value=plant_name or "")
-        ttk.Combobox(info, textvariable=form.plant_var, width=18, values=plant_names).pack(side="left", padx=(4, 4))
+        # An entry always belongs to the grow selected in the sidebar; only a
+        # brand-new grow lets you type a plant name. The grow number is a
+        # database-style id, assigned automatically and never edited by hand.
+        locked_grow = bool(grow_num and plant_name and not new_grow)
+        if locked_grow:
+            tk.Label(info, text=f" {plant_name} ", font=("Segoe UI", 9), bg=BG_INPUT, fg=FG,
+                     padx=2, pady=1).pack(side="left", padx=(4, 4))
+        else:
+            ttk.Combobox(info, textvariable=form.plant_var, width=18, values=plant_names).pack(side="left", padx=(4, 4))
         ttk.Label(info, text="#", font=("Segoe UI", 9, "bold")).pack(side="left")
-        form.grow_num_var = tk.StringVar(value=grow_num or "1")
-        tk.Entry(info, font=("Consolas", 9), width=3, textvariable=form.grow_num_var, bg=BG_INPUT, fg=FG, insertbackground=FG).pack(side="left", padx=(2, 12))
+        form.grow_num_var = tk.StringVar(value=str(grow_num) if grow_num else "")
+        tk.Label(info, text=f" {form.grow_num_var.get() or '-'} ", font=("Consolas", 9, "bold"),
+                 bg=BG_INPUT, fg=FG, padx=2, pady=1).pack(side="left", padx=(2, 4))
+        if new_grow:
+            ttk.Label(info, text="(auto-numbered)", style="Sub.TLabel").pack(side="left", padx=(0, 8))
         ttk.Label(info, text="Planted:", font=("Segoe UI", 9, "bold")).pack(side="left")
         form.date_planted = tk.Entry(info, font=("Consolas", 9), width=10, bg=BG_INPUT, fg=FG, insertbackground=FG)
         form.date_planted.pack(side="left", padx=(4, 12))
@@ -987,14 +1006,17 @@ class GrowGUI:
         ttk.Label(info2, text="(light flip date — lets the AI tell veg from flower)",
                   style="Sub.TLabel").pack(side="left")
 
-        # -- Pre-fill from last entry of this grow --
+        # -- Pre-fill from last entry of this exact grow --
+        # Match the full "Plant #N" label, not just the number: two different
+        # plants can share a number, and a brand-new grow must start blank.
         entries = load_history(DEFAULT_HISTORY).get("analyses", [])
         light_on = light_off = dli = notes = ph = ec = litres = ""
-        gn = grow_num or form.grow_num_var.get().strip()
-        if gn and entries:
+        gn = str(grow_num).strip() if grow_num else form.grow_num_var.get().strip()
+        target = f"{plant_name.strip()} #{gn}".strip() if (plant_name and plant_name.strip() and gn) else ""
+        if target:
             for e in reversed(entries):
                 raw = e.get("plant", "")
-                if raw and raw.endswith(f" #{gn}"):
+                if raw == target:
                     if e.get("date_planted"):
                         form.date_planted.delete(0, "end")
                         form.date_planted.insert(0, e["date_planted"])
@@ -1210,10 +1232,9 @@ class GrowGUI:
             form.ec_entry.insert(0, str(ec))
 
         existing_mix = []
-        if gn and entries:
+        if target:
             for e in reversed(entries):
-                raw = e.get("plant", "")
-                if raw and raw.endswith(f" #{gn}"):
+                if e.get("plant") == target:
                     existing_mix = e.get("nutrients", {}).get("mix", [])
                     break
         for n in existing_mix:
@@ -1241,6 +1262,9 @@ class GrowGUI:
 
         # -- Analyze button --
         def do_analyze():
+            if not form.plant_var.get().strip():
+                messagebox.showwarning("Missing Plant", "Enter a plant name first.")
+                return
             api_key = os.environ.get("GEMINI_API_KEY", "").strip()
             if not api_key:
                 messagebox.showwarning("No API Key", "Set GEMINI_API_KEY environment variable.")
@@ -1253,7 +1277,7 @@ class GrowGUI:
                 api_key = os.environ.get("GEMINI_API_KEY", "").strip()
                 client = genai.Client(api_key=api_key)
                 model_name = form.model_var.get()
-                plant = f"{form.plant_var.get().strip()} #{form.grow_num_var.get().strip()}"
+                plant = f"{form.plant_var.get().strip()} #{gn}"
                 lighting = {
                     "light_on": form.light_on.get().strip(),
                     "light_off": form.light_off.get().strip(),
@@ -1447,6 +1471,10 @@ class GrowGUI:
                 save_history(DEFAULT_HISTORY, history)
                 if form.plant_var.get().strip():
                     self._save_plant_names(form.plant_var.get().strip())
+                try:
+                    self._remember_grow_number(int(gn))
+                except (TypeError, ValueError):
+                    pass
 
                 self.root.after(0, lambda: set_results(report))
                 self.root.after(0, lambda: self._on_analysis_done())
@@ -1457,6 +1485,7 @@ class GrowGUI:
         def _on_analysis_done():
             analyze_btn.config(state="normal", text="Analyze")
             self._refresh_sidebar_grows()
+            self._refresh_sidebar_tl()
 
         self._on_analysis_done = _on_analysis_done
 
@@ -1493,9 +1522,7 @@ class GrowGUI:
         if self._current_view != "timelapse":
             self._show_timelapse_view()
 
-        grow_name = grow_info
-        safe_name = grow_name.replace("#", "").replace(" ", "_").strip()
-        local_dir = os.path.expanduser(f"~/plant-monitor/data/photos/timelapse/{safe_name}")
+        local_dir = os.path.join(self.timelapse_base, grow_info)
         os.makedirs(local_dir, exist_ok=True)
         self.tl_folder_var.set(local_dir)
         self._tl_load_folder()
@@ -1571,7 +1598,7 @@ class GrowGUI:
 
         self.hist_detail.config(state="normal")
         self.hist_detail.delete("1.0", "end")
-        gid = f"#{grow_info['grow_int']}" if grow_info['grow_int'] != 9999 else "?"
+        gid = f"#{grow_info['grow_num']}" if grow_info.get("grow_num") else "?"
         header = f"Grow {gid}: {grow_info['plant_name']}\n{len(entry_indices)} entries\n"
         csv_files = []
         for idx in entry_indices:
@@ -1623,10 +1650,10 @@ class GrowGUI:
         for i, entry in enumerate(entries):
             raw = entry.get("plant", "")
             grow_num = ""
-            plant_name = raw or "(no plant)"
+            plant_name = raw or "(unnamed)"
             if raw and " #" in raw:
                 parts = raw.rsplit(" #", 1)
-                plant_name = parts[0]
+                plant_name = parts[0] or "(unnamed)"
                 grow_num = parts[1]
             try:
                 grow_int = int(grow_num)
@@ -1640,46 +1667,64 @@ class GrowGUI:
                     t = datetime.fromisoformat(ts)
             except Exception:
                 t = datetime.min
-            if grow_num not in grows:
-                grows[grow_num] = {
+            # Group by the full "Plant #N" label, not by the number alone.
+            # Numbers are unique, but this also keeps legacy/unnamed entries
+            # from silently merging into another grow.
+            key = raw or f"__unnamed_{i}"
+            if key not in grows:
+                grows[key] = {
                     "grow_int": grow_int,
+                    "grow_num": grow_num,
                     "plant_name": plant_name,
                     "entries": [],
                     "last_date": t,
                     "last_date_str": t.strftime("%d-%m-%Y") if t != datetime.min else "",
                 }
-            grows[grow_num]["entries"].append(i)
-            if t > grows[grow_num]["last_date"]:
-                grows[grow_num]["last_date"] = t
-                grows[grow_num]["last_date_str"] = t.strftime("%d-%m-%Y")
+            grows[key]["entries"].append(i)
+            if t > grows[key]["last_date"]:
+                grows[key]["last_date"] = t
+                grows[key]["last_date_str"] = t.strftime("%d-%m-%Y")
 
-        sorted_grows = sorted(grows.values(), key=lambda g: g["grow_int"], reverse=True)
+        sorted_grows = sorted(
+            grows.values(),
+            key=lambda g: (g["grow_int"] == 9999, -g["grow_int"], g["plant_name"].lower()),
+        )
         self.sidebar_grow_list.delete(0, "end")
         self._sidebar_grow_items = {}
         self._grow_tree_map = {}
         for i, g in enumerate(sorted_grows):
-            gid = f"#{g['grow_int']}" if g['grow_int'] != 9999 else "?"
+            gid = f"#{g['grow_num']}" if g["grow_num"] else "?"
             display = f" {gid}  {g['plant_name']}  ({len(g['entries'])})"
             self.sidebar_grow_list.insert("end", display)
             self._sidebar_grow_items[i] = g
             self._grow_tree_map[str(i)] = g
 
+    def _timelapse_folder_names(self):
+        """Folders on disk are the source of truth for the timelapse list."""
+        try:
+            names = [
+                d for d in os.listdir(self.timelapse_base)
+                if d != "(history)" and os.path.isdir(os.path.join(self.timelapse_base, d))
+            ]
+        except OSError:
+            return []
+        return sorted(names, key=lambda n: n.lower())
+
+    @staticmethod
+    def _timelapse_display_name(folder):
+        base, sep, num = folder.rpartition("_")
+        if sep and num.isdigit():
+            label = base.replace("_", " ").strip() or "(unnamed)"
+            return f"{label} #{num}"
+        return folder.replace("_", " ").strip()
+
     def _refresh_sidebar_tl(self):
-        history = load_history(DEFAULT_HISTORY)
-        entries = history.get("analyses", [])
-        grows = {}
-        for entry in entries:
-            raw = entry.get("plant", "")
-            if raw and " #" in raw:
-                grows[raw] = True
-            elif raw:
-                grows[raw] = True
-        names = sorted(grows.keys())
+        names = self._timelapse_folder_names()
         self.sidebar_tl_list.delete(0, "end")
         self._sidebar_tl_items = {}
-        for i, name in enumerate(names):
-            self.sidebar_tl_list.insert("end", f" {name}")
-            self._sidebar_tl_items[i] = name
+        for i, folder in enumerate(names):
+            self.sidebar_tl_list.insert("end", f" {self._timelapse_display_name(folder)}")
+            self._sidebar_tl_items[i] = folder
 
     # ----------------------------------------------------------- Plant names
     def _parse_time(self, s):
@@ -1709,20 +1754,55 @@ class GrowGUI:
                 json.dump(names, f)
 
     # ----------------------------------------------------------- Grow/Entry dialogs
-    def _new_grow_dialog(self):
-        history = load_history(DEFAULT_HISTORY)
-        entries = history.get("analyses", [])
-        max_grow = 0
-        for e in entries:
+    def _grow_counter(self):
+        """Highest grow number ever issued (persisted so numbers are never reused)."""
+        try:
+            with open(self.grow_counter_file) as f:
+                return int(json.load(f).get("next", 1)) - 1
+        except (OSError, ValueError, TypeError):
+            return 0
+
+    def _remember_grow_number(self, number):
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            return
+        if number <= self._grow_counter():
+            return
+        try:
+            os.makedirs(os.path.dirname(self.grow_counter_file), exist_ok=True)
+            with open(self.grow_counter_file, "w") as f:
+                json.dump({"next": number + 1}, f)
+        except OSError:
+            pass
+
+    def _next_grow_number(self):
+        highest = self._grow_counter()
+        for e in load_history(DEFAULT_HISTORY).get("analyses", []):
             raw = e.get("plant", "")
-            if raw and " #" in raw:
+            if " #" in raw:
                 try:
-                    g = int(raw.rsplit(" #", 1)[1])
-                    if g > max_grow:
-                        max_grow = g
+                    highest = max(highest, int(raw.rsplit(" #", 1)[1]))
                 except ValueError:
                     pass
-        self._show_entry_form(grow_num=str(max_grow + 1), plant_name="")
+        return highest + 1
+
+    def _add_entry(self):
+        """Add an entry to the grow selected in the sidebar (never a guessed one)."""
+        grow = self._active_grow
+        if not grow and self._sidebar_grow_items:
+            grow = max(
+                (g for g in self._sidebar_grow_items.values() if g.get("grow_num")),
+                key=lambda g: g.get("grow_int", 0),
+                default=None,
+            )
+        if grow and grow.get("grow_num") and grow.get("plant_name") not in ("", "(unnamed)"):
+            self._show_entry_form(grow_num=grow["grow_num"], plant_name=grow["plant_name"])
+        else:
+            self._new_grow_dialog()
+
+    def _new_grow_dialog(self):
+        self._show_entry_form(grow_num=str(self._next_grow_number()), plant_name="", new_grow=True)
 
     # ----------------------------------------------------------- Live View
     def _open_live_view(self, addr=None):
@@ -1854,9 +1934,9 @@ class GrowGUI:
 
         # Re-lookup active grow from fresh sidebar data
         if old_grow:
-            key = (old_grow.get("plant_name", ""), old_grow.get("grow_int", 9999))
+            key = (old_grow.get("plant_name", ""), old_grow.get("grow_num", ""))
             for g in self._sidebar_grow_items.values():
-                if (g.get("plant_name", ""), g.get("grow_int", 9999)) == key:
+                if (g.get("plant_name", ""), g.get("grow_num", "")) == key:
                     self._active_grow = g
                     break
 
@@ -2242,7 +2322,7 @@ class GrowGUI:
         if not self._active_grow:
             return
         grow = self._active_grow
-        gid = f"#{grow['grow_int']}" if grow["grow_int"] != 9999 else "?"
+        gid = f"#{grow['grow_num']}" if grow.get("grow_num") else "?"
         plant = grow["plant_name"]
         n = len(grow["entries"])
         if not messagebox.askyesno("Delete Grow", f"Delete ALL {n} entries for '{plant} #{gid}'?\nThis cannot be undone."):
@@ -2292,6 +2372,92 @@ class GrowGUI:
         ttk.Button(win, text="Save", style="Accent.TButton", command=save).pack(pady=8)
 
     # ----------------------------------------------------------- Timelapse
+    def _on_tl_right_click(self, event):
+        idx = self.sidebar_tl_list.nearest(event.y)
+        if idx < 0 or idx >= self.sidebar_tl_list.size():
+            return
+        self.sidebar_tl_list.selection_clear(0, "end")
+        self.sidebar_tl_list.selection_set(idx)
+        self.sidebar_tl_list.activate(idx)
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Show photos", command=lambda: self._on_sidebar_tl_select(None))
+        menu.add_command(label="Delete timeline...", command=self._delete_tl_grow)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _delete_tl_grow(self):
+        """Delete a timelapse folder (local copy, optionally the Pi copy).
+
+        Diary entries are untouched; use Delete Grow in the log view for that.
+        """
+        sel = self.sidebar_tl_list.curselection()
+        folder = self._sidebar_tl_items.get(sel[0]) if sel else None
+        current = self.tl_folder_var.get().strip() if hasattr(self, "tl_folder_var") else ""
+        if not folder and current:
+            folder = os.path.basename(os.path.normpath(current))
+        if not folder:
+            messagebox.showinfo("Delete Timeline", "Select a timelapse grow in the sidebar first.")
+            return
+
+        local_dir = os.path.join(self.timelapse_base, folder)
+        if not os.path.isdir(local_dir):
+            messagebox.showinfo("Delete Timeline",
+                                f"'{self._timelapse_display_name(folder)}' is not a timelapse folder on this PC.")
+            return
+
+        file_count = 0
+        total_bytes = 0
+        for root, _dirs, files in os.walk(local_dir):
+            for fn in files:
+                file_count += 1
+                try:
+                    total_bytes += os.path.getsize(os.path.join(root, fn))
+                except OSError:
+                    pass
+        label = self._timelapse_display_name(folder)
+        if not messagebox.askyesno(
+            "Delete Timeline",
+            f"Delete the timelapse '{label}'?\n\n"
+            f"{file_count} file(s), {total_bytes / (1024 * 1024):.1f} MB, "
+            "will be deleted from this PC.\n"
+            "Grow diary entries are not affected.",
+        ):
+            return
+
+        if messagebox.askyesno("Delete from Pi?",
+                               f"Also delete '{label}' from the Raspberry Pi?"):
+            try:
+                r = subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                     "hawkewing@raspberrypi.local",
+                     f'rm -rf -- "$HOME/plant-monitor/data/photos/timelapse/{folder}"'],
+                    capture_output=True, text=True, timeout=20,
+                )
+                if r.returncode != 0:
+                    messagebox.showwarning("Pi Delete",
+                                           f"Could not delete on the Pi:\n{r.stderr.strip() or r.returncode}")
+            except Exception as e:
+                messagebox.showwarning("Pi Delete", f"Could not reach the Pi:\n{e}")
+
+        try:
+            shutil.rmtree(local_dir)
+        except OSError as e:
+            messagebox.showerror("Delete Failed", str(e))
+            return
+
+        if current and os.path.normpath(current) == os.path.normpath(local_dir):
+            self.tl_folder_var.set("")
+            if hasattr(self, "tl_canvas"):
+                self.tl_canvas.delete("all")
+            self._tl_dates = {}
+            self._tl_photos = []
+            if hasattr(self, "tl_date_list"):
+                self._refresh_timelapse_dates()
+
+        self._refresh_sidebar_tl()
+
     def _tl_browse_folder(self):
         initial = self.tl_folder_var.get().strip()
         if not initial or not os.path.isdir(initial):
@@ -2375,16 +2541,7 @@ class GrowGUI:
         return result["path"]
 
     def _tl_refresh_grows(self):
-        history = load_history(DEFAULT_HISTORY)
-        entries = history.get("analyses", [])
-        grows = {}
-        for entry in entries:
-            raw = entry.get("plant", "")
-            if raw and " #" in raw:
-                grows[raw] = True
-            elif raw:
-                grows[raw] = True
-        names = sorted(grows.keys())
+        names = [self._timelapse_display_name(n) for n in self._timelapse_folder_names()]
         if hasattr(self, "tl_grow_combo"):
             self.tl_grow_combo["values"] = names
             if names and not self.tl_grow_var.get():
